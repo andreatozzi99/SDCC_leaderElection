@@ -1,2 +1,4 @@
 # SDCC_leaderElection
-Implementation of two Distributed Algorithm for leader election: Buuly and Raft-election.
+Implementation of two distributed algorithms for leader election: Bully and Raft.
+Language: GO
+Containerization using: Docker-Compose
