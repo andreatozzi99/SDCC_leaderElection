@@ -9,10 +9,17 @@ import (
 	"time"
 )
 
-// Variabile che rappresentano lo stato (variabile) di un nodo
+// Assunzioni preliminari:
+// Siamo in un sistema distribuito SINCRONO: conosciamo il tempo massimo di trasmissione.
+// Timeout da attendere senza nessuna risposta prima di diventare Leader in seguito a un processo di ELEZIONE
+
+// ------------- Variabili che rappresentano lo stato (variabile) di un nodo --------------
 var nodeList []Node    // Lista dei nodi di cui un nodo è a conoscenza
 var leaderID = -1      // ID dell'attuale leader
-var leaderAddress = "" // Indirizzo dell'attuale leader, inizialmente sconosciuto
+var leaderAddress = "" // Indirizzo dell'attuale leader+Porta, inizialmente sconosciuto
+var election = false   // True = Elezione in corso | False = Nessuna Elezione in corso
+//var verbose = true // Prendere da file di configurazione per attivare/disattivare commenti aggiuntivi
+// ----------------------------------------------------------------------------------------
 
 // Node Struttura per rappresentare un nodo
 type Node struct {
@@ -21,12 +28,17 @@ type Node struct {
 	Port      int
 }
 
-// ELECTION Metodo per avviare un processo di elezione
+// ELECTION Metodo invocato come rpc dagli altri nodi della rete
+// In tal modo notificano la loro volontà di diventare Leader
 func (n *Node) ELECTION(senderNode Node, reply *bool) error {
+	if true { //########## modificare con verbose
+		fmt.Println("Ricevuto messaggio ELECTION da:", senderNode.ID)
+	}
+
 	// Se l'ID del chiamante è più basso di quello del nodo corrente, invoca il metodo "STOP" del chiamante
 	if senderNode.ID < n.ID {
 		// qui sto dando per implicito che tutti gli indirizzi siano "localhost:", ma non va bene
-		client, err := rpc.Dial("tcp", fmt.Sprintf(senderNode.IPAddress, senderNode.Port))
+		client, err := rpc.Dial("tcp", fmt.Sprintf("%s:%d", n.IPAddress, n.Port))
 		if err != nil {
 			fmt.Println("Errore nella connessione con il nodo :", senderNode.ID, ",", senderNode.IPAddress, senderNode.Port)
 			return err
@@ -38,7 +50,7 @@ func (n *Node) ELECTION(senderNode Node, reply *bool) error {
 			}
 		}(client)
 		// Invocazione metodo STOP sul nodo
-		var reply bool
+		*reply = false
 		err = client.Call("Node.Stop", 0, &reply)
 		if err != nil {
 			fmt.Println("Errore durante la chiamata RPC per invocare il metodo 'STOP' sul nodo", senderNode.ID)
@@ -46,7 +58,24 @@ func (n *Node) ELECTION(senderNode Node, reply *bool) error {
 		}
 	}
 	// Non fare nulla se l' ID del chiamante è più alto dell' ID locale
+	*reply = true
 	return nil
+}
+
+// COORDINATOR verrà invocata da un nodo nella rete,
+// per comunicare che è lui il NUOVO LEADER
+func (n *Node) COORDINATOR(senderNode Node, reply *bool) error {
+	// TODO
+	// Verifico se il senderNode è presente nella mia lista dei nodi, in caso contrario, lo aggiungo
+	// Imposto i parametri del leader
+	return nil
+}
+
+// STOP verrà invocata dai nodi della rete per fermare il nostro proposito di diventare LEADER
+func (n *Node) STOP(senderNode Node, reply *bool) {
+	// TODO
+	// Devo fare qualcosa per bloccare la funzione "startElection"
+	// che sta inviando ancora messaggi o attendendo il timeout prima di autoproclamarsi LEADER
 }
 
 // HeartBeat Metodo per contattare il nodo Leader e verificare se esse è ancora attivo
@@ -64,7 +93,9 @@ func main() {
 	}
 	// Genera una porta casuale disponibile per il nodo
 	node.Port = findAvailablePort()
-
+	if node.Port == 0 {
+		fmt.Println("Errore nella ricerca di una porta")
+	}
 	// Avvio nodo
 	node.start()
 
@@ -104,7 +135,7 @@ func (n *Node) start() {
 	}
 
 	// Visualizza l'ID e la porta assegnati al nodo
-	fmt.Printf("Regisrazione sulla rete avvenuta ID %d: Assigned port %d\n", n.ID, n.Port)
+	fmt.Printf("Regisrazione sulla rete avvenuta. ID %d: Assigned port %d\n", n.ID, n.Port)
 
 	// Chiamata RPC per richiedere la lista dei nodi al server di registrazione
 	// ############ Nome servizio su file CONF ###################
@@ -116,8 +147,18 @@ func (n *Node) start() {
 	// Funzione ausiliaria per stampa del vettore dei nodi (nodi che il serverRegistry conosce)
 	printNodeList()
 
-	// Scoperta dell'attuale leader della rete
-	// -> inizio processo di Elezione, più messaggi sulla rete, ma non richiede ulteriore funzioni
+	// Se la lista dei nodi online è composta solo da me stesso, sono io il Leader!
+	// Verifica se la dimensione di nodeList è 1 e se il nodo presente è il nodo corrente
+	if len(nodeList) == 1 {
+		if nodeList[0].ID == n.ID {
+			// Sono l'unico nodo nella rete -> Sono il Leader !
+			leaderID = n.ID
+			leaderAddress = fmt.Sprintf("%s:%d", n.IPAddress, n.Port)
+		}
+	}
+
+	// Non sono io il Leader -> inizio processo di Elezione.
+	// Contro: Più messaggi sulla rete, ma non richiede ulteriore funzioni e si sfrutta l'algoritmo di elezione
 	n.startElection() // Non è possibile farla in una goRoutine, le operazioni sottostanti dipendono dall'indirizzo del Leader
 
 	// Avvia la goroutine per heartbeat
@@ -127,6 +168,7 @@ func (n *Node) start() {
 // Meccanismo di Failure Detection:
 // contattare il nodo leader periodicamente (Invocazione del metodo remoto: HeartBeat)
 func (n *Node) heartBeatRoutine() {
+	// Questa routine dovrebbe essere interrotta durante il processo di Elezione di un nuovo leader(?)
 	for {
 		// Contatta il nodo leader
 		if !n.isLeaderAlive() {
@@ -180,13 +222,12 @@ func (n *Node) isLeaderAlive() bool {
 // Metodo per avviare un processo di elezione,
 // e invocare la chiamata rpc ELECTION solo sui nodi nella rete con ID superiore all' ID locale
 func (n *Node) startElection() {
-
 	for _, node := range nodeList {
 		if node.ID > n.ID {
 			// Avviata go routine per contattare il nodo
 			go func(nodeID int) {
 				// Effettua una chiamata RPC al nodo specificato per avviare un processo di elezione
-				client, err := rpc.Dial("tcp", fmt.Sprintf(node.IPAddress, node.Port))
+				client, err := rpc.Dial("tcp", fmt.Sprintf("%s:%d", n.IPAddress, n.Port))
 				if err != nil {
 					fmt.Println("Errore nella chiamata RPC per avviare l'elezione sul nodo", node.Port)
 					return
@@ -199,7 +240,7 @@ func (n *Node) startElection() {
 				}(client)
 
 				var reply bool
-				err = client.Call("Node.Election", n.ID, &reply)
+				err = client.Call("Node.ELECTION", n.ID, &reply)
 				if err != nil {
 					fmt.Println("Errore durante la chiamata RPC per avviare l'elezione sul nodo", nodeID)
 					return
@@ -207,6 +248,8 @@ func (n *Node) startElection() {
 			}(node.ID)
 		}
 	}
+	// Dopo che ho inviato tutte le ELECTION, dovrei assicurarmi di non aver o aver ricevuto una rpc STOP
+	// Metto un timer(?)
 }
 
 // Funzione per trovare una porta disponibile casuale
@@ -214,18 +257,15 @@ func findAvailablePort() int {
 	// Cerca una porta disponibile partendo da una porta casuale
 	startPort := 30000
 	for port := startPort; port < 65535; port++ {
-		ln, err := net.Listen("tcp", ":"+strconv.Itoa(port))
+		_, err := net.Listen("tcp", ":"+strconv.Itoa(port))
 		if err == nil {
-			err := ln.Close()
-			if err != nil {
-				return 0
-			}
 			return port
 		}
 	}
 	return 0 // Ritorna 0 se non viene trovata alcuna porta disponibile
 }
 
+// Stampa dei nodi nella rete
 func printNodeList() {
 	fmt.Print("I nodi sulla rete sono:")
 	for _, node := range nodeList {
