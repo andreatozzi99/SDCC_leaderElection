@@ -20,7 +20,7 @@ func (nr *NodeRegistry) RegisterNode(node Node, reply *int) error {
 	defer nr.mutex.Unlock()
 
 	// Incrementa l'ID solo se il nodo non ha già un ID assegnato
-	if node.ID == 0 {
+	if node.ID == -1 {
 		nr.lastID++         // Incrementa l'ID
 		node.ID = nr.lastID // Assegna il nuovo ID al nodo
 	}
