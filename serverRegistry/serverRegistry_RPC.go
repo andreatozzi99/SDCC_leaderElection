@@ -1,11 +1,5 @@
+// Studente Andrea Tozzi, MATRICOLA: 0350270
 package main
-
-// Node Struttura per rappresentare un nodo
-type Node struct {
-	ID        int
-	IPAddress string
-	Port      int
-}
 
 // NodeRegistryInterface Interfaccia per le chiamate RPC del serverRegistry
 type NodeRegistryInterface interface {

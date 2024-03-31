@@ -1,3 +1,4 @@
+// Studente Andrea Tozzi, MATRICOLA: 0350270
 package main
 
 import (
@@ -7,9 +8,16 @@ import (
 	"sync"
 )
 
+// Node Struttura per rappresentare un nodo
+type Node struct {
+	ID        int
+	IPAddress string
+	Port      int
+}
+
 // NodeRegistry Struttura per il registro dei nodi
 type NodeRegistry struct {
-	nodes  map[int]Node
+	nodes  []Node
 	lastID int
 	mutex  sync.Mutex
 }
@@ -25,17 +33,22 @@ func (nr *NodeRegistry) RegisterNode(node Node, reply *int) error {
 		node.ID = nr.lastID // Assegna il nuovo ID al nodo
 	}
 
-	nr.nodes[node.ID] = node
-	*reply = node.ID
-	fmt.Printf("Node %d registered successfully\n", node.ID)
+	nr.nodes = append(nr.nodes, node)
+	*reply = node.ID // Il valore di reply è l'ID del nodo che si sta registrando
+	fmt.Printf("Nodo: %d Registrato correttamente \n", node.ID)
+	go nr.printNodeList()
 	return nil
 }
 
 // GetRegisteredNodes Metodo per ottenere l'elenco dei nodi registrati
-func (nr *NodeRegistry) GetRegisteredNodes(_, reply *map[int]Node) error {
-	nr.mutex.Lock()
-	defer nr.mutex.Unlock()
-	*reply = nr.nodes
+func (nr *NodeRegistry) GetRegisteredNodes(input Node, reply *[]Node) error {
+	// Se la richiesta arriva da un nodo con ID > 0, allora è un nodo già registrato
+	if input.ID > 0 {
+		nr.mutex.Lock()
+		defer nr.mutex.Unlock()
+		*reply = nr.nodes
+		return nil
+	}
 	return nil
 }
 
@@ -43,7 +56,7 @@ func (nr *NodeRegistry) GetRegisteredNodes(_, reply *map[int]Node) error {
 func main() {
 	// Inizializzazione del registro dei nodi
 	registry := &NodeRegistry{
-		nodes: make(map[int]Node),
+		nodes: make([]Node, 0), // Inizializza con slice vuota
 	}
 
 	// Creazione di un nuovo server RPC
@@ -77,7 +90,15 @@ func main() {
 			fmt.Println("Errore nell'accettare la connessione:", err)
 			continue
 		}
-		// Gestione delle connessioni in nuovo thread
+		// Gestione delle connessioni in un nuovo thread
 		go server.ServeConn(conn)
+	}
+}
+
+// Stampa dei nodi nella rete
+func (nr *NodeRegistry) printNodeList() {
+	fmt.Print("I nodi registrati sono:")
+	for _, node := range nr.nodes {
+		fmt.Printf("\nID: %d, IP: %s, Port: %d", node.ID, node.IPAddress, node.Port)
 	}
 }

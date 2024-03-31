@@ -1,3 +1,4 @@
+// Studente Andrea Tozzi, MATRICOLA: 0350270
 package main
 
 import (
@@ -6,6 +7,7 @@ import (
 	"net"
 	"net/rpc"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -13,11 +15,16 @@ import (
 // Siamo in un sistema distribuito SINCRONO: conosciamo il tempo massimo di trasmissione.
 // Timeout da attendere senza nessuna risposta prima di diventare Leader in seguito a un processo di ELEZIONE
 
-// ------------- Variabili che rappresentano lo stato (variabile) di un nodo --------------
-var nodeList []Node    // Lista dei nodi di cui un nodo è a conoscenza
-var leaderID = -1      // ID dell'attuale leader
-var leaderAddress = "" // Indirizzo dell'attuale leader+Porta, inizialmente sconosciuto
-var election = false   // True = Elezione in corso | False = Nessuna Elezione in corso
+// ---------------- Variabili che rappresentano lo stato di un nodo ------------------
+
+var nodeList = make([]Node, 0)         // Lista dei nodi di cui un nodo è a conoscenza
+var leaderID = -1                      // ID dell'attuale leader
+var leaderAddress = ""                 // Indirizzo dell'attuale leader+Porta, inizialmente sconosciuto
+var election = false                   // True = Elezione in corso | False = Nessuna Elezione in corso
+var electionMutex sync.Mutex           // Lucchetto per l'accesso alla variabile election
+var controlHeartBeat = make(chan bool) // Canale bidirezionale per attivare/disattivare la goroutine di HeartBeat quando necessario
+//var timerInSecond = 5
+
 //var verbose = true // Prendere da file di configurazione per attivare/disattivare commenti aggiuntivi
 // ----------------------------------------------------------------------------------------
 
@@ -34,11 +41,15 @@ func (n *Node) ELECTION(senderNode Node, reply *bool) error {
 	if true { //########## modificare con verbose
 		fmt.Println("Ricevuto messaggio ELECTION da:", senderNode.ID)
 	}
+	// Devo interrompere la routine di HeartBeat, invio segnale
+	controlHeartBeat <- false
+
+	go n.addNodeInNodeList(senderNode)
 
 	// Se l'ID del chiamante è più basso di quello del nodo corrente, invoca il metodo "STOP" del chiamante
 	if senderNode.ID < n.ID {
-		// Connessione
-		client, err := rpc.Dial("tcp", fmt.Sprintf("%s:%d", n.IPAddress, n.Port))
+		// Connessione con nodo
+		client, err := rpc.Dial("tcp", fmt.Sprintf("%s:%d", senderNode.IPAddress, senderNode.Port))
 		if err != nil {
 			fmt.Println("Errore nella connessione con il nodo :", senderNode.ID, ",", senderNode.IPAddress, ":", senderNode.Port)
 			return err
@@ -50,46 +61,37 @@ func (n *Node) ELECTION(senderNode Node, reply *bool) error {
 			}
 		}(client)
 
-		// Invocazione metodo STOP sul nodo, dato che ID sender < ID locale
+		// Invocazione metodo STOP sul nodo, dato che ID sender < ID locale, lui non può diventare leader
 		*reply = false
-		err = client.Call("Node.Stop", 0, &reply)
+		err = client.Call("Node.STOP", 0, &reply)
 		if err != nil {
 			fmt.Println("Errore durante la chiamata RPC per invocare il metodo 'STOP' sul nodo", senderNode.ID)
 			return err
 		}
 	}
 	// Non fare nulla se l' ID del chiamante è più alto dell' ID locale
+	// Questo non dovrebbe succedere secondo l'algoritmo bully che invia messaggi di election solo a nodi con id maggiore
 	*reply = true
 	return nil
 }
 
 // COORDINATOR viene invocata da un nodo nella rete,
-// per comunicare che è lui il NUOVO LEADER
+// per comunicare che è lui il NUOVO LEADER-> cambio valori di leaderID e leaderAddress.
 func (n *Node) COORDINATOR(senderNode Node, reply *bool) error {
 
-	// Cerca il senderNode nella lista dei nodi. Per eliminare eventuali problemi nella rete.
-	// Notare che per un grande numero di nodi nella rete, eseguire questo controllo per ogni messaggio
-	// Coordinator, potrebbe generare problemi.
-	found := false
-	for _, node := range nodeList {
-		if node.ID == senderNode.ID {
-			// Il senderNode è già presente nella lista dei nodi
-			found = true
-			break
-		}
-	}
-	// Se senderNode non era presente nella lista dei nodi
-	if !found {
-		// Aggiungi il senderNode alla lista dei nodi
-		nodeList = append(nodeList, senderNode)
-	}
-	// --------------------- Aggiorno Leader -----------------------
+	//  ---------- Aggiungo senderNode nella nodeList in caso non sia già presente -------------
+	// Notare che per un grande numero di nodi nella rete, eseguire questo controllo per ogni messaggio Coordinator, potrebbe generare problemi.
+	go n.addNodeInNodeList(senderNode)
 
-	// Imposta i parametri del senderNode come parametri locali del leader
+	// --------------------- Aggiorno il riferimento al Leader -----------------------
 	leaderID = senderNode.ID
 	leaderAddress = senderNode.IPAddress + ":" + strconv.Itoa(senderNode.Port)
 	// ################### AGGIUNGERE VERBOSE #############à
 	fmt.Printf("Ho ricevuto COORDINATOR da parte del nodo -->%d, è lui il nuovo leader \n", senderNode.ID)
+
+	// Avvia routine di HeartBeat
+	controlHeartBeat <- true
+
 	// Restituisci true per indicare che il leader è stato aggiornato con successo
 	*reply = true
 
@@ -98,43 +100,49 @@ func (n *Node) COORDINATOR(senderNode Node, reply *bool) error {
 
 // STOP verrà invocata dai nodi della rete per fermare il nostro proposito di diventare LEADER
 func (n *Node) STOP(senderNode Node, reply *bool) {
-	// TODO
-	// Devo fare qualcosa per bloccare la funzione "startElection"
-	// che sta inviando ancora messaggi o attendendo il timeout prima di autoproclamarsi LEADER
+	// Acquisisci il mutex per garantire la mutua esclusione sull'accesso alla variabile election
+	electionMutex.Lock()
+	defer electionMutex.Unlock()
+
+	// Imposta la variabile election a false per interrompere l'elezione in corso
+	election = false
+	*reply = true
+	fmt.Printf("Nodo: %d, Il nodo %d ha invocato il metodo STOP. L'elezione è stata interrotta.\n", n.ID, senderNode.ID)
 }
 
 // HEARTBEAT Metodo per contattare il nodo Leader e verificare se esse è ancora attivo
 func (n *Node) HEARTBEAT(senderID int, reply *bool) error {
 	*reply = true // Se la funzione viene avviata, vuol dire che il nodo è funzionante
 	// ################### AGGIUNGERE VERBOSE #############à
-	fmt.Printf("LEADER %d :Msg di HEARTBEAT da parte di -->%d\n", n.ID, senderID)
+	fmt.Printf("Nodo LEADER: %d, Msg di HEARTBEAT da parte ddel nodo: %d\n", n.ID, senderID)
 	return nil
 }
 
 func main() {
 	// Creazione struttura nodo
 	node := &Node{
-		ID:        -1, // cosi il nodeRegistry assegna il giusto ID
+		ID:        -1, // Per il nodeRegistry, che assegnerà un nuovo ID
 		IPAddress: "localhost",
 	}
 	// Genera una porta casuale disponibile per il nodo
-	node.Port = findAvailablePort()
+	node.Port, _ = findAvailablePort()
 	if node.Port == 0 {
 		fmt.Println("Errore nella ricerca di una porta")
 	}
 
-	// Avvio nodo (Ingresso nella rete tramite nodeRegistry ed esposizione dei servizi remoti)
+	// Avvio nodo (Ingresso nella rete tramite nodeRegistry ed esposizione dei servizi remoti del nodo)
 	node.start()
 
 	// Mantiene il programma in esecuzione
 	select {}
+
 }
 
 // Metodo per avviare il nodo e registrarne l'indirizzo nel server di registrazione
 // e recuperare la lista dei nodi in rete
 func (n *Node) start() {
 	// ------------- Avvio goRoutine per simulare il crash ------------------
-	go emulateCrash()
+	go emulateCrash() // Crash = Chiusura del programma tramite funzione di exit
 
 	// ------------- Esposizione dei metodi per le chiamate RPC -------------
 	err := rpc.Register(n)
@@ -142,7 +150,7 @@ func (n *Node) start() {
 		return
 	}
 
-	// Crea un listener RPC
+	// Creazione listener RPC
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", n.Port))
 	if err != nil {
 		fmt.Println("Errore durante la creazione del listener RPC:", err)
@@ -154,18 +162,17 @@ func (n *Node) start() {
 		}
 	}(listener)
 
-	// Accetta le connessioni RPC in arrivo
+	// -------- Accetta le connessioni per RPC in arrivo in una goroutine ------------
 	fmt.Printf("Nodo in ascolto su porta %d per le chiamate RPC...\n", n.Port)
-	rpc.Accept(listener)
-	// ------------------------------------
+	go rpc.Accept(listener)
 
-	// ------------- Connessione al server di registrazione -------------------
+	// ------------- Ingresso nella rete tramite Node Registry ------------------
 	client, err := rpc.Dial("tcp", "localhost:8080")
 	if err != nil {
-		fmt.Println("Errore nella connessione al server di registrazione:", err)
+		fmt.Println("Errore nella connessione al NodeRegistry server:", err)
 		return
 	}
-	// Chiusura connessione a fine di questa funzione
+	// ---- Chiusura connessione con defer ----
 	defer func(client *rpc.Client) {
 		err := client.Close()
 		if err != nil {
@@ -173,25 +180,26 @@ func (n *Node) start() {
 		}
 	}(client)
 
-	// Chiamata RPC per registrare il nodo nel server di registrazione
-	var reply bool
-	// ############ Nome servizio su file CONF ###################
+	// ---------- RPC per Registrare il nodo --------------
+	var reply int
+	// ################# Nome servizio su file CONF ###################
 	err = client.Call("NodeRegistry.RegisterNode", n, &reply)
 	if err != nil {
 		fmt.Println("Errore durante la registrazione del nodo:", err)
 		return
 	}
-	if !reply {
+	if reply == -1 {
 		fmt.Println("Il server di registrazione ha rifiutato la registrazione del nodo")
 		return
 	}
-
+	// Imposto il mio nuovo ID (restituito dalla chiamata rpc al nodeRegistry)
+	n.ID = reply
 	// Visualizza l'ID e la porta assegnati al nodo
-	fmt.Printf("Regisrazione sulla rete avvenuta. ID %d: Assigned port %d\n", n.ID, n.Port)
+	fmt.Printf("Regisrato sulla rete. ID %d: Porta %d\n", n.ID, n.Port)
 
-	// Chiamata RPC per richiedere la lista dei nodi al server di registrazione
+	// ---------- RPC per ricevere la lista dei nodi nella rete  ----------
 	// ############ Nome servizio su file CONF ###################
-	err = client.Call("NodeRegistry.GetNodeList", 0, &nodeList)
+	err = client.Call("NodeRegistry.GetRegisteredNodes", n, &nodeList)
 	if err != nil {
 		fmt.Println("Errore durante la richiesta della lista dei nodi:", err)
 		return
@@ -199,53 +207,59 @@ func (n *Node) start() {
 	// Funzione ausiliaria per stampa del vettore dei nodi restituita dal nodeRegistry
 	printNodeList()
 
-	// Contro: Più messaggi sulla rete, ma non richiede ulteriore funzioni e si sfrutta l'algoritmo di elezione
+	// ---------------------- Scoperta dell'attuale Leader ----------------------
 	n.startElection() // Non è possibile eseguirla in una goRoutine, le operazioni sottostanti dipendono dall'indirizzo del Leader
+	// Contro: Più messaggi sulla rete
+	// Pro: il Leader non è in crash, ma se un nuovo nodo entra, ha ID più alto.
+	// Pro: Non richiede ulteriore funzioni e si sfrutta l'algoritmo di elezione
 
 	if leaderID == -1 {
-		_ = fmt.Errorf("Node:%d ERRORE, nessun leader riscontrato a seguito di una Elezione\n", n.ID)
+		_ = fmt.Errorf("Node:%d ERRORE, nessun leader impostato a seguito di una Elezione\n", n.ID)
 	}
-	if n.ID != leaderID {
-		// Avvia la goroutine per heartbeat
-		go n.heartBeatRoutine()
-		return
-	}
-	// Se il leader sono io, non devo andare in heartBeatRoutine
+
+	// Avvio heartBeatRoutine per contattare periodicamente il Leader
+	go n.heartBeatRoutine(controlHeartBeat)
 	return
 }
 
 // Meccanismo di Failure Detection:
 // Contattare il nodo leader periodicamente (Invocazione del metodo remoto: HEARTBEAT)
-func (n *Node) heartBeatRoutine() {
-	// Questa routine dovrebbe essere interrotta durante il processo di Elezione di un nuovo leader(?)
-	if leaderID != -1 {
-		// Non dovrebbe essere stata avviata questa funzione se non c'è un leader
-		fmt.Printf("Nodo:%d Errore! Sono nella heartBeatRoutine, ma non ho un leader definito\n", n.ID)
-		return
-	}
+func (n *Node) heartBeatRoutine(control <-chan bool) {
 	for {
-		// Verifica se il nodo leader è raggiungibile
-		if !n.isLeaderAlive() {
-			// se il leader non è raggiungibile, ne deve essere eletto un altro
-			go n.startElection()
+		// Attendiamo un segnale per verificare se la routine deve essere attiva o meno
+		active := <-control
 
-			// la heartBeatRoutine deve essere interrotta fino a che non ci sarà un nuovo leader
-			return
+		if active {
+			// Continua il normale flusso di heartbeat solo se la routine è attiva
+			// Verifica se il nodo leader è raggiungibile
+			fmt.Printf("Node %d, Contatto il Leader %d con metodo rpc HEARTBEAT\n", n.ID, leaderID)
+			if !n.sendHeartBeatMessage() {
+				// se il leader non è raggiungibile -> Indire un processo di Elezione
+				go n.startElection()
+
+				// La heartBeatRoutine deve essere interrotta fino a che non ci sarà un nuovo leader
+				controlHeartBeat <- false
+				continue
+			}
+
+			// Attendi un intervallo casuale prima di effettuare un nuovo heartbeat
+			// ######### Selezione intervallo su file di configurazione ##########
+			randomSeconds := rand.Intn(10-1) + 1
+			interval := time.Duration(randomSeconds) * time.Second
+			time.Sleep(interval)
 		}
 
-		// Attendi un intervallo casuale prima di effettuare un nuovo heartbeat
-		// ######### Selezione intervallo su file di configurazione ##########
-		randomSeconds := rand.Intn(10-1) + 1
-		interval := time.Duration(randomSeconds) * time.Second
-		time.Sleep(interval)
+		// Attendi un breve intervallo prima di iniziare il prossimo ciclo
+		// per ridurre l'uso della CPU
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 
 // Metodo per contattare il nodo leader tramite la chiamata rpc HEARTBEAT esposta dai nodi
 // @return: True se il leader risponde, False altrimenti.
-func (n *Node) isLeaderAlive() bool {
+func (n *Node) sendHeartBeatMessage() bool {
 
-	// Se il nodo stesso è il leader, esci
+	// Se il nodo che avvia questa funzione è il leader, esci
 	if n.ID == leaderID {
 		return true
 	}
@@ -279,40 +293,72 @@ func (n *Node) isLeaderAlive() bool {
 // Metodo per avviare un processo di elezione,
 // e invocare la chiamata rpc ELECTION solo sui nodi nella rete con ID superiore all' ID locale
 func (n *Node) startElection() {
+	// Contatore per il numero di messaggi di elezione inviati
+	electionMessagesSent := 0
 
-	// Canale per ricevere i risultati delle goroutine
-	resultCh := make(chan bool, len(nodeList)-1)
-
+	// Invia messaggi ELECTION a nodi con ID maggiore dell' ID locale
 	for _, node := range nodeList {
 		if node.ID > n.ID {
-			// Avvia goroutine per contattare il nodo con ID maggiore dell'ID locale
+			// Avvia goroutine per inviare messaggio ELECTION al nodo con ID maggiore
 			go func(node Node) {
-				resultCh <- n.sendElectionMessage(node)
+				if n.sendElectionMessage(node) {
+					// Incrementa il contatore se il messaggio di elezione è stato inviato con successo
+					electionMessagesSent++
+				}
 			}(node)
 		}
 	}
 
-	// Controlla i risultati dalle goroutine
-	for range nodeList[1:] {
-		if !<-resultCh {
-			// Se anche solo uno dei risultati è falso = STOP, devo abbandonare il proposito di diventare Leader
-			return
-		}
+	// Se non è stato inviato alcun messaggio di elezione, nessun nodo con id superiore trovato
+	if electionMessagesSent == 0 {
+		// Imposta i parametri del nodo corrente come parametri locali del leader
+		leaderID = n.ID
+		leaderAddress = fmt.Sprintf("%s:%d", n.IPAddress, n.Port)
+		fmt.Printf("Nodo:%d -> Non ci sono nodi con ID superiore, invio messaggio COORDINATOR a tutti.\n", n.ID)
+		n.sendCoordinatorMessages()
+		return
 	}
-	// Inviati tutt i messaggi ELECTION
-	// dovrei assicurarmi di non aver ricevuto una rpc STOP
-	// --------------- Timer prima dell'auto elezione -----------------
-	// Attualmente non serve perché sto utilizzando i valori di funzione
 
-	// Sono io il leader, devo inviare messaggio di COORDINATOR a tutti i nodi nella rete
-	dfnrngs
+	// Canale per ricevere l'esito dell'elezione
+	electionResult := make(chan bool)
+
+	// Avvia una goroutine per controllare lo stato della variabile election
+	// durante l'attesa del timer
+	go func() {
+		for {
+			// Se la variabile election diventa false, invia false sul canale
+			if !election {
+				electionResult <- false
+				return
+			}
+			// Attendi un breve intervallo prima di controllare nuovamente
+			time.Sleep(100 * time.Millisecond)
+		}
+	}()
+
+	// Attendi l'esito dell'elezione per un certo periodo
+	select {
+	case <-electionResult:
+		// Se la variabile election diventa false durante l'attesa del timer,
+		// termina l'elezione
+		fmt.Println("Terminata l'elezione, non posso diventare il leader.")
+		return
+	case <-time.After(5 * time.Second):
+		// Il timer è scaduto, avvia la procedura per diventare il leader
+		fmt.Println("Sono il nuovo leader, invio il messaggio COORDINATOR.")
+		// Invia messaggio COORDINATOR a tutti i nodi nella rete
+		leaderID = n.ID
+		leaderAddress = fmt.Sprintf("%s:%d", n.IPAddress, n.Port)
+		n.sendCoordinatorMessages()
+	}
+	return
 }
 
-// Invoca procedura remota ELECTION su node(secondo parametro),
+// Invoca procedura remota ELECTION sul nodo inserito come parametro
 // @return: true se posso continuare elezione, false per interrompere processo di elezione
 func (n *Node) sendElectionMessage(node Node) bool {
 	// Effettua una chiamata RPC al nodo specificato per avviare un processo di elezione
-	client, err := rpc.Dial("tcp", fmt.Sprintf("%s:%d", n.IPAddress, n.Port))
+	client, err := rpc.Dial("tcp", fmt.Sprintf("%s:%d", node.IPAddress, node.Port))
 	if err != nil {
 		fmt.Println("Errore nella chiamata RPC ELECTION sul nodo, non è raggiungibile", node.IPAddress, ":", node.Port)
 		return true
@@ -339,21 +385,80 @@ func (n *Node) sendElectionMessage(node Node) bool {
 	return true
 }
 
-// Funzione per trovare una porta disponibile casuale
-func findAvailablePort() int {
-	// Cerca una porta disponibile partendo da una porta casuale
-	startPort := 30000
-	for port := startPort; port < 65535; port++ {
-		_, err := net.Listen("tcp", ":"+strconv.Itoa(port))
-		if err == nil {
-			return port
+// Invoca la procedura remota COORDINATOR su tutti i nodi nella nodeList per notificare il nuovo Leader
+func (n *Node) sendCoordinatorMessages() {
+	// Itera su tutti i nodi nella nodeList
+	for _, node := range nodeList {
+		// Se il nodo è diverso da se stesso
+		if node.ID != n.ID {
+			// Avvia una goroutine per invocare la procedura remota COORDINATOR su questo nodo
+			go func(node Node) {
+				// Effettua una chiamata RPC per invocare la procedura remota COORDINATOR
+				client, err := rpc.Dial("tcp", fmt.Sprintf("%s:%d", node.IPAddress, node.Port))
+				if err != nil {
+					fmt.Printf("Errore durante la connessione al nodo %d: %v\n", node.ID, err)
+					return
+				}
+				defer func(client *rpc.Client) {
+					err := client.Close()
+					if err != nil {
+						return
+					}
+				}(client)
+
+				// Variabile per memorizzare la risposta remota
+				var reply bool
+
+				// Effettua la chiamata RPC
+				err = client.Call("Node.COORDINATOR", *n, &reply)
+				if err != nil {
+					fmt.Printf("Errore durante la chiamata RPC COORDINATOR al nodo %d: %v\n", node.ID, err)
+					return
+				}
+
+				// Stampa un messaggio di conferma
+				fmt.Printf("Chiamata RPC COORDINATOR al nodo %d completata con successo\n", node.ID)
+			}(node)
 		}
 	}
-	return 0 // Ritorna 0 se non viene trovata alcuna porta disponibile
+}
+
+// Funzione ausiliaria per aggiungere il senderNode se non è presente nella nodeList
+func (n *Node) addNodeInNodeList(senderNode Node) {
+	found := false
+	for _, node := range nodeList {
+		if node.ID == senderNode.ID {
+			// Il senderNode è già presente nella lista dei nodi
+			found = true
+			break
+		}
+	}
+	// Se senderNode non è presente in nodeList
+	if !found {
+		// Aggiungi il senderNode alla lista dei nodi
+		nodeList = append(nodeList, senderNode)
+	}
+}
+
+// Funzione per trovare una porta disponibile casuale
+func findAvailablePort() (int, error) {
+	listener, err := net.Listen("tcp", ":0")
+	if err != nil {
+		return 0, err
+	}
+	defer func(listener net.Listener) {
+		err := listener.Close()
+		if err != nil {
+			return
+		}
+	}(listener)
+	addr := listener.Addr().(*net.TCPAddr)
+	return addr.Port, nil
 }
 
 func emulateCrash() {
 	//TODO
+	// Attualmente non può avvenire crash, le prove verranno effettuate da terminale
 }
 
 // Stampa dei nodi nella rete
