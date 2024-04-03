@@ -156,11 +156,6 @@ func (n *Node) start() {
 		fmt.Println("Errore durante la creazione del listener RPC:", err)
 		return
 	}
-	defer func(listener net.Listener) {
-		err := listener.Close()
-		if err != nil {
-		}
-	}(listener)
 
 	// -------- Accetta le connessioni per RPC in arrivo in una goroutine ------------
 	fmt.Printf("Nodo in ascolto su porta %d per le chiamate RPC...\n", n.Port)
@@ -314,7 +309,7 @@ func (n *Node) startElection() {
 		// Imposta i parametri del nodo corrente come parametri locali del leader
 		leaderID = n.ID
 		leaderAddress = fmt.Sprintf("%s:%d", n.IPAddress, n.Port)
-		fmt.Printf("Nodo:%d -> Non ci sono nodi con ID superiore, invio messaggio COORDINATOR a tutti.\n", n.ID)
+		fmt.Printf("\nNodo:%d -> Non ci sono nodi con ID superiore, invio messaggio COORDINATOR a tutti.\n\n", n.ID)
 		n.sendCoordinatorMessages()
 		return
 	}
