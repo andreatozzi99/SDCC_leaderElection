@@ -35,7 +35,7 @@ func (nr *NodeRegistry) RegisterNode(node Node, reply *int) error {
 
 	nr.nodes = append(nr.nodes, node)
 	*reply = node.ID // Il valore di reply è l'ID del nodo che si sta registrando
-	fmt.Printf("Nodo: %d Registrato correttamente \n", node.ID)
+	fmt.Printf("\nNodo: %d Registrato correttamente \n", node.ID)
 	go nr.printNodeList()
 	return nil
 }

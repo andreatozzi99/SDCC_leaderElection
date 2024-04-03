@@ -17,15 +17,23 @@ import (
 
 // ---------------- Variabili che rappresentano lo stato di un nodo ------------------
 
-var nodeList = make([]Node, 0)         // Lista dei nodi di cui un nodo è a conoscenza
-var leaderID = -1                      // ID dell'attuale leader
-var leaderAddress = ""                 // Indirizzo dell'attuale leader+Porta, inizialmente sconosciuto
-var election = false                   // True = Elezione in corso | False = Nessuna Elezione in corso
-var electionMutex sync.Mutex           // Lucchetto per l'accesso alla variabile election
-var controlHeartBeat = make(chan bool) // Canale bidirezionale per attivare/disattivare la goroutine di HeartBeat quando necessario
-//var timerInSecond = 5
+var nodeList = make([]Node, 0) // Lista dei nodi di cui un nodo è a conoscenza
+var leaderID = -1              // ID dell'attuale leader
+var leaderAddress = ""         // Indirizzo dell'attuale leader+Porta, inizialmente sconosciuto
+var election = false           // True = Elezione in corso | False = Nessuna Elezione in corso
+var electionMutex sync.Mutex   // Lucchetto per l'accesso alla variabile election
+
+// Definiamo una variabile globale per lo stato della heartBeatRoutine
+var hbState = HeartBeatState{active: true, interrupt: make(chan struct{})}
+
+// HeartBeatState Struct per gestire lo stato della heartBeatRoutine
+type HeartBeatState struct {
+	active    bool
+	interrupt chan struct{} // Canale per interrompere heartBeatRoutine
+}
 
 //var verbose = true // Prendere da file di configurazione per attivare/disattivare commenti aggiuntivi
+
 // ----------------------------------------------------------------------------------------
 
 // Node Struttura per rappresentare un nodo
@@ -42,7 +50,7 @@ func (n *Node) ELECTION(senderNode Node, reply *bool) error {
 		fmt.Println("Ricevuto messaggio ELECTION da:", senderNode.ID)
 	}
 	// Devo interrompere la routine di HeartBeat, invio segnale
-	controlHeartBeat <- false
+	interruptHeartBeatRoutine()
 
 	go n.addNodeInNodeList(senderNode)
 
@@ -83,14 +91,19 @@ func (n *Node) COORDINATOR(senderNode Node, reply *bool) error {
 	// Notare che per un grande numero di nodi nella rete, eseguire questo controllo per ogni messaggio Coordinator, potrebbe generare problemi.
 	go n.addNodeInNodeList(senderNode)
 
+	// --------------------- Interrompi un eventuale elezione in corso --------------
+	electionMutex.Lock()
+	defer electionMutex.Unlock()
+	election = false
+
 	// --------------------- Aggiorno il riferimento al Leader -----------------------
 	leaderID = senderNode.ID
 	leaderAddress = senderNode.IPAddress + ":" + strconv.Itoa(senderNode.Port)
 	// ################### AGGIUNGERE VERBOSE #############à
 	fmt.Printf("Ho ricevuto COORDINATOR da parte del nodo -->%d, è lui il nuovo leader \n", senderNode.ID)
 
-	// Avvia routine di HeartBeat
-	controlHeartBeat <- true
+	// Riattiva routine di HeartBeat
+	restoreHeartBeatRoutine()
 
 	// Restituisci true per indicare che il leader è stato aggiornato con successo
 	*reply = true
@@ -114,7 +127,7 @@ func (n *Node) STOP(senderNode Node, reply *bool) {
 func (n *Node) HEARTBEAT(senderID int, reply *bool) error {
 	*reply = true // Se la funzione viene avviata, vuol dire che il nodo è funzionante
 	// ################### AGGIUNGERE VERBOSE #############à
-	fmt.Printf("Nodo LEADER: %d, Msg di HEARTBEAT da parte ddel nodo: %d\n", n.ID, senderID)
+	fmt.Printf("LEADER| Nodo %d, Msg di HEARTBEAT ricevuto dal nodo: %d\n", n.ID, senderID)
 	return nil
 }
 
@@ -207,46 +220,40 @@ func (n *Node) start() {
 	// Contro: Più messaggi sulla rete
 	// Pro: il Leader non è in crash, ma se un nuovo nodo entra, ha ID più alto.
 	// Pro: Non richiede ulteriore funzioni e si sfrutta l'algoritmo di elezione
-
 	if leaderID == -1 {
 		_ = fmt.Errorf("Node:%d ERRORE, nessun leader impostato a seguito di una Elezione\n", n.ID)
 	}
+	fmt.Printf("Il leader è il nodo %d\n", leaderID)
 
 	// Avvio heartBeatRoutine per contattare periodicamente il Leader
-	go n.heartBeatRoutine(controlHeartBeat)
+	go n.heartBeatRoutine()
 	return
 }
 
 // Meccanismo di Failure Detection:
 // Contattare il nodo leader periodicamente (Invocazione del metodo remoto: HEARTBEAT)
-func (n *Node) heartBeatRoutine(control <-chan bool) {
-	for {
-		// Attendiamo un segnale per verificare se la routine deve essere attiva o meno
-		active := <-control
-
-		if active {
-			// Continua il normale flusso di heartbeat solo se la routine è attiva
+func (n *Node) heartBeatRoutine() {
+	fmt.Printf("\nNodo %d, heartBeatRoutine avviata\n", n.ID)
+	for hbState.active {
+		select {
+		case <-hbState.interrupt:
+			// heartBeatRoutine è stata interrotta
+			return
+		default:
+			// Continua con heartBeatRoutine
 			// Verifica se il nodo leader è raggiungibile
-			fmt.Printf("Node %d, Contatto il Leader %d con metodo rpc HEARTBEAT\n", n.ID, leaderID)
+			fmt.Printf("Node %d, Contatto il Leader con id %d con metodo rpc HEARTBEAT\n", n.ID, leaderID)
 			if !n.sendHeartBeatMessage() {
-				// se il leader non è raggiungibile -> Indire un processo di Elezione
+				// Se il leader non è raggiungibile, avvia un'elezione
+				interruptHeartBeatRoutine() // Interrompi heartBeatRoutine fino all'elezione di un nuovo leader
 				go n.startElection()
-
-				// La heartBeatRoutine deve essere interrotta fino a che non ci sarà un nuovo leader
-				controlHeartBeat <- false
 				continue
 			}
-
 			// Attendi un intervallo casuale prima di effettuare un nuovo heartbeat
-			// ######### Selezione intervallo su file di configurazione ##########
 			randomSeconds := rand.Intn(10-1) + 1
 			interval := time.Duration(randomSeconds) * time.Second
 			time.Sleep(interval)
 		}
-
-		// Attendi un breve intervallo prima di iniziare il prossimo ciclo
-		// per ridurre l'uso della CPU
-		time.Sleep(100 * time.Millisecond)
 	}
 }
 
@@ -256,6 +263,7 @@ func (n *Node) sendHeartBeatMessage() bool {
 
 	// Se il nodo che avvia questa funzione è il leader, esci
 	if n.ID == leaderID {
+		fmt.Println("Sono il Leader, non invio HeartBeat")
 		return true
 	}
 
@@ -285,13 +293,28 @@ func (n *Node) sendHeartBeatMessage() bool {
 	return true
 }
 
+// Funzione per interrompere heartBeatRoutine
+func interruptHeartBeatRoutine() {
+	hbState.active = false
+	close(hbState.interrupt)
+}
+
+// Funzione per ripristinare heartBeatRoutine
+func restoreHeartBeatRoutine() {
+	hbState.active = true
+	hbState.interrupt = make(chan struct{})
+}
+
 // Metodo per avviare un processo di elezione,
 // e invocare la chiamata rpc ELECTION solo sui nodi nella rete con ID superiore all' ID locale
 func (n *Node) startElection() {
-	// Contatore per il numero di messaggi di elezione inviati
-	electionMessagesSent := 0
+	// ---------------- Imposto election come true, c'è un elezione in atto --------------
+	electionMutex.Lock()
+	election = true
+	electionMutex.Unlock()
 
-	// Invia messaggi ELECTION a nodi con ID maggiore dell' ID locale
+	// --------- Invia messaggi ELECTION a nodi con ID maggiore dell'ID locale ----------
+	var electionMessagesSent int
 	for _, node := range nodeList {
 		if node.ID > n.ID {
 			// Avvia goroutine per inviare messaggio ELECTION al nodo con ID maggiore
@@ -303,50 +326,43 @@ func (n *Node) startElection() {
 			}(node)
 		}
 	}
-
-	// Se non è stato inviato alcun messaggio di elezione, nessun nodo con id superiore trovato
+	// Se non è stato inviato alcun messaggio di elezione e l'elezione non è stata interrotta, sono il Leader
 	if electionMessagesSent == 0 {
+		// Verifica per sicurezza
+		electionMutex.Lock()
+		if !election {
+			electionMutex.Unlock()
+			return
+		}
+		electionMutex.Unlock()
+
 		// Imposta i parametri del nodo corrente come parametri locali del leader
 		leaderID = n.ID
 		leaderAddress = fmt.Sprintf("%s:%d", n.IPAddress, n.Port)
-		fmt.Printf("\nNodo:%d -> Non ci sono nodi con ID superiore, invio messaggio COORDINATOR a tutti.\n\n", n.ID)
+		fmt.Printf("\nNodo:%d -> Non ci sono nodi con ID superiore, invio messaggio COORDINATOR a tutti.\n", n.ID)
+		restoreHeartBeatRoutine()
 		n.sendCoordinatorMessages()
 		return
 	}
+	// Avvia un timer per l'elezione
+	timer := time.NewTimer(5 * time.Second)
 
-	// Canale per ricevere l'esito dell'elezione
-	electionResult := make(chan bool)
+	// Attendi il termine del timer o l'interruzione dell'elezione
+	<-timer.C
 
-	// Avvia una goroutine per controllare lo stato della variabile election
-	// durante l'attesa del timer
-	go func() {
-		for {
-			// Se la variabile election diventa false, invia false sul canale
-			if !election {
-				electionResult <- false
-				return
-			}
-			// Attendi un breve intervallo prima di controllare nuovamente
-			time.Sleep(100 * time.Millisecond)
-		}
-	}()
-
-	// Attendi l'esito dell'elezione per un certo periodo
-	select {
-	case <-electionResult:
-		// Se la variabile election diventa false durante l'attesa del timer,
-		// termina l'elezione
-		fmt.Println("Terminata l'elezione, non posso diventare il leader.")
+	// Se l'elezione è stata interrotta, termina la funzione
+	electionMutex.Lock()
+	if !election {
+		electionMutex.Unlock()
+		fmt.Println("L'elezione è stata interrotta, non posso diventare il Leader")
 		return
-	case <-time.After(5 * time.Second):
-		// Il timer è scaduto, avvia la procedura per diventare il leader
-		fmt.Println("Sono il nuovo leader, invio il messaggio COORDINATOR.")
-		// Invia messaggio COORDINATOR a tutti i nodi nella rete
-		leaderID = n.ID
-		leaderAddress = fmt.Sprintf("%s:%d", n.IPAddress, n.Port)
-		n.sendCoordinatorMessages()
 	}
-	return
+	electionMutex.Unlock()
+
+	// L'elezione non è stata interrotta, invio messaggio COORDINATOR a tutti
+	fmt.Printf("\nNodo:%d -> Nessun nodo con ID superiore ha interrotto l'elezione. Invio messaggio COORDINATOR a tutti.\n", n.ID)
+	restoreHeartBeatRoutine()
+	n.sendCoordinatorMessages()
 }
 
 // Invoca procedura remota ELECTION sul nodo inserito come parametro
