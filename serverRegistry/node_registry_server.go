@@ -97,7 +97,7 @@ func main() {
 
 // Stampa dei nodi nella rete
 func (nr *NodeRegistry) printNodeList() {
-	fmt.Print("I nodi registrati sono:")
+	fmt.Print("\nI nodi registrati sono:")
 	for _, node := range nr.nodes {
 		fmt.Printf("\nID: %d, IP: %s, Port: %d", node.ID, node.IPAddress, node.Port)
 	}
