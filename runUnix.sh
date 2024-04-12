@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Numero di nodi da avviare
-NUM_NODES=5
+NUM_NODES=6
 
 # Avvia il server di registro dei nodi in un nuovo terminale Konsole
 konsole -e "bash -c 'cd serverRegistry/ && go run node_registry_server.go; exec bash'" &

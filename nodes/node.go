@@ -48,13 +48,13 @@ type Node struct {
 // In tal modo notificano la loro volontà di diventare Leader
 // Se ID del senderNode è minore dell' ID locale, invio messaggio STOP e avvio nuova Elezione
 func (n *Node) ELECTION(senderNode Node, reply *bool) error {
-	go n.addNodeInNodeList(senderNode) // Potenzialmente inutile
+	go n.addNodeInNodeList(senderNode)
 	//########## modificare con verbose
-	fmt.Println("Ricevuto messaggio ELECTION da:", senderNode.ID)
+	fmt.Printf("Nodo %d <-- ELECTION Nodo %d\n", n.ID, senderNode.ID)
 
-	if n.ID == leaderID { // Se sono il leader, non devo avviare un elezione
-		return nil
-	}
+	/*if n.ID == leaderID {// Se sono il leader, non devo avviare un elezione
+	return nil}
+	*/
 	// Devo interrompere la routine di HeartBeat, è preferibile non contattare il leader,
 	// porterebbe alla scoperta del crash anche per questo nodo, con conseguente elezione
 	go interruptHeartBeatRoutine()
@@ -81,6 +81,7 @@ func (n *Node) ELECTION(senderNode Node, reply *bool) error {
 		if err != nil {
 			fmt.Println("Errore durante la chiamata RPC per invocare il metodo 'STOP' sul nodo", senderNode.ID, err)
 		}
+		fmt.Printf("Nodo %d: STOP --> Nodo %d\n", n.ID, senderNode.ID)
 		// -------------- Avvio Elezione ---------------------
 		// ###### BUG: non devo avviare un elezione se sono già stato interrotto (STOP) una volta
 		// Esempio: sono 2, crash nodo Leader 5, inizio elezione, 4 mi invia STOP, fermo elezione,
@@ -98,7 +99,7 @@ func (n *Node) ELECTION(senderNode Node, reply *bool) error {
 func (n *Node) COORDINATOR(senderNode Node, reply *bool) error {
 	// --------------------- Interrompi un eventuale elezione in corso --------------
 	electionMutex.Lock()
-	election = false
+	election = false // Indagato di eventuali bug: eletto nodo con id non massimo
 	electionMutex.Unlock()
 	//  ---------- Aggiungo senderNode nella nodeList in caso non sia già presente -------------
 	// Notare che per un grande numero di nodi nella rete, eseguire questo controllo per ogni messaggio Coordinator, potrebbe generare problemi.
@@ -108,9 +109,9 @@ func (n *Node) COORDINATOR(senderNode Node, reply *bool) error {
 	leaderID = senderNode.ID
 	leaderAddress = senderNode.IPAddress + ":" + strconv.Itoa(senderNode.Port)
 	// ################### AGGIUNGERE VERBOSE #############
-	fmt.Printf("Ho ricevuto COORDINATOR da parte del nodo -->%d, è lui il nuovo leader \n", senderNode.ID)
+	fmt.Printf("Nodo %d <-- COORDINATOR Nodo %d . Leader = %d \n", n.ID, senderNode.ID, senderNode.ID)
 
-	// --------- Riattiva routine di HeartBeat ----------
+	// --------- Riattiva routine di HeartBeat (Se non è attiva) ----------
 	n.restoreHeartBeatRoutine()
 	// Restituisci true per indicare che il leader è stato aggiornato con successo
 	*reply = true
@@ -123,14 +124,14 @@ func (n *Node) STOP(senderNode Node, reply *bool) error {
 	electionMutex.Lock()
 	if !election {
 		// Non c'è un elezione in corso, ma è stato invocato il metodo STOP -> Print per analizzare il sistema
-		fmt.Printf("Nodo: %d, invocato il metodo STOP dal nodo %d\n", n.ID, senderNode.ID)
+		fmt.Printf("Nodo %d <-- STOP Nodo %d.", n.ID, senderNode.ID)
 		electionMutex.Unlock()
 		*reply = true
 		return nil
 	}
 	election = false
 	electionMutex.Unlock()
-	fmt.Printf("Nodo: %d, invocato il metodo STOP dal nodo %d. L'elezione è stata interrotta.\n", n.ID, senderNode.ID)
+	fmt.Printf("Nodo %d <-- STOP Nodo %d. Elezione interrotta.\n", n.ID, senderNode.ID)
 	*reply = true
 	return nil
 }
@@ -139,7 +140,7 @@ func (n *Node) STOP(senderNode Node, reply *bool) error {
 func (n *Node) HEARTBEAT(senderID int, reply *bool) error {
 	*reply = true // Se la funzione viene avviata, vuol dire che il nodo è funzionante
 	// ################### AGGIUNGERE VERBOSE #############
-	fmt.Printf("LEADER| Nodo %d, Msg di HEARTBEAT ricevuto dal nodo: %d\n", n.ID, senderID)
+	fmt.Printf("LEADER %d| <-- HEARTBEAT Nodo %d\n", n.ID, senderID)
 	return nil
 }
 
@@ -246,7 +247,8 @@ func (n *Node) heartBeatRoutine() {
 				// Se il leader non è raggiungibile, avvia un'elezione
 				leaderID = -1
 				leaderAddress = ""
-				go n.startElection() //prova: ho tolto go qui
+				go n.startElection()
+				// interruptHeartBeatRoutine() PROVA
 				return
 			}
 			// Attendi un intervallo casuale prima di effettuare un nuovo heartbeat
@@ -263,7 +265,7 @@ func (n *Node) heartBeatRoutine() {
 // @return: True se il leader risponde, False altrimenti.
 func (n *Node) sendHeartBeatMessage() bool {
 	if n.ID == leaderID { // Se il nodo che avvia questa funzione è il leader, non fare nulla
-		fmt.Println("SONO IL LEADER")
+		fmt.Println("LEADER| Non invio HeartBeat")
 		return true
 	}
 	if leaderID < 0 { // Se nessun leader è attualmente impostato, non fare nulla
@@ -331,29 +333,36 @@ func (n *Node) startElection() {
 	electionMutex.Unlock()
 	// --------- Invia messaggi ELECTION a nodi con ID maggiore dell'ID locale ----------
 	fmt.Println("Avvio un processo di elezione")
+	i := 0
 	for _, node := range nodeList {
 		if node.ID > n.ID {
 			// Avvia goroutine per inviare messaggio ELECTION al nodo con ID maggiore
 			go n.sendElectionMessage(node)
+			i++
 		}
 	}
 	// ---------- Avvia un timer per attendere messaggi di tipo STOP ------------
-	time.Sleep(5 * time.Second)
-	// ---------- Se l'elezione è stata interrotta, termina la funzione -------------
-	electionMutex.Lock()
-	if !election {
-		electionMutex.Unlock() // Il print non serve
-		fmt.Println("L'elezione è stata interrotta, non posso diventare il Leader")
-		return
+	if i != 0 {
+		time.Sleep(5 * time.Second)
+		// ---------- Se l'elezione è stata interrotta, termina la funzione -------------
+		electionMutex.Lock()
+		if !election {
+			electionMutex.Unlock() // Il print non serve
+			fmt.Println("L'elezione è stata interrotta, non posso diventare il Leader")
+			return
+		}
+		electionMutex.Unlock()
 	}
-	fmt.Printf("\nNodo:%d -> Nessun nodo con ID superiore ha interrotto l'elezione. Invio messaggio COORDINATOR a tutti.\n", n.ID)
-	// ---------------- Imposto election come false, elezione terminata --------------
-	election = false
-	electionMutex.Unlock()
+	// ----------- SONO IL LEADER ------------
+	fmt.Printf("\nNodo %d SONO LEADER. COORDINATOR --> tutta la rete.\n", n.ID)
 	leaderID = n.ID
 	leaderAddress = n.IPAddress + ":" + strconv.Itoa(n.Port)
 	go n.sendCoordinatorMessages()
 	go n.restoreHeartBeatRoutine()
+	// ---------------- Imposto election come false, elezione terminata --------------
+	electionMutex.Lock()
+	election = false // PROVA: SPOSTATO SOTTO LA PRINT, INVECE CHE PRIMA
+	electionMutex.Unlock()
 }
 
 // Invoca procedura remota ELECTION sul nodo inserito come parametro
@@ -467,17 +476,20 @@ func emulateCrash(node *Node, listener net.Listener) {
 		if randomNum == 0 {
 			if active {
 				// Cambia lo stato del nodo da attivo a in crash
-				fmt.Println(" -------------------- IL NODO E' IN CRASH -------------------- ")
-				active = false
-				// Interrompi heartBeatRoutine per simulare crash del nodo
-				interruptHeartBeatRoutine()
 				// Interrompi il listener RPC
 				err := listener.Close()
 				if err != nil {
 				}
+				fmt.Println(" \n-------------------- IL NODO E' IN CRASH --------------------\n ")
+				// Interrompi heartBeatRoutine per evitare che il nodo comunichi con il Leader
+				interruptHeartBeatRoutine()
+				// Cambio valori del leader perché non saranno più validi al momento del rientro
+				leaderID = -1
+				leaderAddress = ""
+				active = false
 			} else {
 				// Cambia lo stato del nodo da in crash ad attivo
-				fmt.Println(" -------------------- IL NODO E' ATTIVO --------------------- ")
+				fmt.Println(" \n-------------------- IL NODO E' ATTIVO ---------------------\n ")
 				active = true
 				// Riavvia il listener RPC
 				newListener, err := net.Listen("tcp", fmt.Sprintf(":%d", node.Port))
@@ -494,17 +506,7 @@ func emulateCrash(node *Node, listener net.Listener) {
 				//
 				// NON CONOSCO IL NUOVO LEADER DELLA RETE -> Inizio un elezione
 				node.startElection()
-				// Dovrebbe bastare per tornare operativi
-
 			}
 		}
-	}
-}
-
-// Stampa dei nodi nella rete
-func printNodeList() {
-	fmt.Print("I nodi sulla rete sono:")
-	for _, node := range nodeList {
-		fmt.Printf("ID: %d, IP: %s, Port: %d\n", node.ID, node.IPAddress, node.Port)
 	}
 }
