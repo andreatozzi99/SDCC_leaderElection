@@ -12,28 +12,24 @@ import (
 )
 
 // Assunzioni preliminari:
-// Siamo in un sistema distribuito SINCRONO: conosciamo il tempo massimo di trasmissione.
-// Timeout da attendere senza nessuna risposta prima di diventare Leader in seguito a un processo di ELEZIONE
+// 1) Siamo in un sistema distribuito SINCRONO: conosciamo il tempo massimo di trasmissione.
+// 2) Tutti i Nodi nella rete, non solo il Leader, possono avere un Crash e Tornare attivi
+var serverAddress = "localhost:8080"
 
 // ---------------- Variabili che rappresentano lo stato di un nodo ------------------
-
 var nodeList = make([]Node, 0) // Lista dei nodi di cui un nodo è a conoscenza
-var leaderID = -1              // ID dell'attuale leader
+var leaderID = -1              // ID dell'attuale leader. Se < 0 => Leader sconosciuto
 var leaderAddress = ""         // Indirizzo dell'attuale leader+Porta, inizialmente sconosciuto
 var election = false           // True = Elezione in corso | False = Nessuna Elezione in corso
 var electionMutex sync.Mutex   // Lucchetto per l'accesso alla variabile election
-var hbStateMutex sync.Mutex
-
-// Definiamo una variabile globale per lo stato della heartBeatRoutine
-var hbState = HeartBeatState{active: true, interrupt: make(chan struct{})}
+var hbState = HeartBeatState{active: false, interrupt: make(chan struct{})}
+var hbStateMutex sync.Mutex // Lucchetto per l'accesso alla variabile hbState
 
 // HeartBeatState Struct per gestire lo stato della heartBeatRoutine
 type HeartBeatState struct {
 	active    bool
 	interrupt chan struct{} // Canale per interrompere heartBeatRoutine
 }
-
-//var verbose = true // Prendere da file di configurazione per attivare/disattivare commenti aggiuntivi
 
 // ----------------------------------------------------------------------------------------
 
@@ -54,11 +50,15 @@ func (n *Node) ELECTION(senderNode Node, reply *bool) error {
 
 	/*if n.ID == leaderID {// Se sono il leader, non devo avviare un elezione
 	return nil}
-	*/
+	*/ //############## Eliminato dato che in seguito a eventi di crash e resume un nodo potrebbe cercare il leader anche se l'attuale leader è attivo
+
 	// Devo interrompere la routine di HeartBeat, è preferibile non contattare il leader,
 	// porterebbe alla scoperta del crash anche per questo nodo, con conseguente elezione
-	go interruptHeartBeatRoutine()
-
+	// Elimino i dati del Leader che ho attualmente? --> Pericoloso
+	// go interruptHeartBeatRoutine()
+	leaderID = -1 // Per evitare che la routine di HeartBeat contatti il leader
+	// ######### Può portare problemi perché un nodo potrebbe ricevere msg election dopo aver impostato correttamente i valori, e perdere il riferimento al leader
+	leaderAddress = ""
 	// ---------------- Se l'ID del chiamante è più basso di quello del nodo locale ----------------
 	if senderNode.ID < n.ID {
 		// ------------- Connessione con senderNode --------------
@@ -70,10 +70,8 @@ func (n *Node) ELECTION(senderNode Node, reply *bool) error {
 		defer func(client *rpc.Client) {
 			err := client.Close()
 			if err != nil {
-				return
 			}
 		}(client)
-
 		// -------------- Invocazione metodo STOP sul senderNode ------------------------
 		// non può diventare leader se il suo ID non è il massimo nella rete
 		*reply = false
@@ -83,7 +81,7 @@ func (n *Node) ELECTION(senderNode Node, reply *bool) error {
 		}
 		fmt.Printf("Nodo %d: STOP --> Nodo %d\n", n.ID, senderNode.ID)
 		// -------------- Avvio Elezione ---------------------
-		// ###### BUG: non devo avviare un elezione se sono già stato interrotto (STOP) una volta
+		// #################: non devo avviare un elezione se sono già stato interrotto (STOP) una volta
 		// Esempio: sono 2, crash nodo Leader 5, inizio elezione, 4 mi invia STOP, fermo elezione,
 		// 			il nodo 1 mi invia ELECTION, inizio elezione=> NON VA BENE
 		go n.startElection()
@@ -99,7 +97,7 @@ func (n *Node) ELECTION(senderNode Node, reply *bool) error {
 func (n *Node) COORDINATOR(senderNode Node, reply *bool) error {
 	// --------------------- Interrompi un eventuale elezione in corso --------------
 	electionMutex.Lock()
-	election = false // Indagato di eventuali bug: eletto nodo con id non massimo
+	election = false // Indagato per bug: eletto nodo con id non massimo
 	electionMutex.Unlock()
 	//  ---------- Aggiungo senderNode nella nodeList in caso non sia già presente -------------
 	// Notare che per un grande numero di nodi nella rete, eseguire questo controllo per ogni messaggio Coordinator, potrebbe generare problemi.
@@ -108,11 +106,11 @@ func (n *Node) COORDINATOR(senderNode Node, reply *bool) error {
 	// --------------------- Aggiorno il riferimento al Leader -----------------------
 	leaderID = senderNode.ID
 	leaderAddress = senderNode.IPAddress + ":" + strconv.Itoa(senderNode.Port)
-	// ################### AGGIUNGERE VERBOSE #############
+	// ################### AGGIUNGERE VERBOSE ###################
 	fmt.Printf("Nodo %d <-- COORDINATOR Nodo %d . Leader = %d \n", n.ID, senderNode.ID, senderNode.ID)
 
-	// --------- Riattiva routine di HeartBeat (Se non è attiva) ----------
-	n.restoreHeartBeatRoutine()
+	// --------- Riattiva routine di HeartBeat ----------
+	// n.startHeartBeatRoutine()
 	// Restituisci true per indicare che il leader è stato aggiornato con successo
 	*reply = true
 	return nil
@@ -124,7 +122,7 @@ func (n *Node) STOP(senderNode Node, reply *bool) error {
 	electionMutex.Lock()
 	if !election {
 		// Non c'è un elezione in corso, ma è stato invocato il metodo STOP -> Print per analizzare il sistema
-		fmt.Printf("Nodo %d <-- STOP Nodo %d.", n.ID, senderNode.ID)
+		fmt.Printf("Nodo %d <-- STOP Nodo %d.\n", n.ID, senderNode.ID)
 		electionMutex.Unlock()
 		*reply = true
 		return nil
@@ -154,14 +152,10 @@ func main() {
 	node.Port, _ = findAvailablePort()
 	if node.Port == 0 {
 		fmt.Println("Errore nella ricerca di una porta")
+		return
 	}
-
-	// Avvio nodo (Ingresso nella rete tramite nodeRegistry ed esposizione dei servizi remoti del nodo)
-	node.start()
-
-	// Mantiene il programma in esecuzione
-	select {}
-
+	node.start() // Avvio nodo (Ingresso nella rete tramite nodeRegistry ed esposizione dei servizi remoti del nodo)
+	select {}    // Mantiene il programma in esecuzione
 }
 
 // Metodo per avviare il nodo e registrarne l'indirizzo nel server di registrazione
@@ -182,7 +176,7 @@ func (n *Node) start() {
 	fmt.Printf("Nodo in ascolto su porta %d per le chiamate RPC...\n", n.Port)
 	go rpc.Accept(listener)
 	// ------------- Ingresso nella rete tramite Node Registry ------------------
-	client, err := rpc.Dial("tcp", "localhost:8080")
+	client, err := rpc.Dial("tcp", serverAddress)
 	if err != nil {
 		fmt.Println("Errore nella connessione al NodeRegistry server:", err)
 		return
@@ -210,7 +204,7 @@ func (n *Node) start() {
 	// Imposto il mio nuovo ID (restituito dalla chiamata rpc al nodeRegistry)
 	n.ID = reply
 	// Visualizza l'ID e la porta assegnati al nodo
-	fmt.Printf("Regisrato sulla rete. ID %d: Porta %d\n", n.ID, n.Port)
+	fmt.Printf("-------- Regisrato sulla rete. ID %d: Porta  %d --------\n", n.ID, n.Port)
 
 	// ---------- RPC per ricevere la lista dei nodi nella rete  ----------
 	// ############ Nome servizio su file CONF ###################
@@ -219,13 +213,11 @@ func (n *Node) start() {
 		fmt.Println("Errore durante la richiesta della lista dei nodi:", err)
 		return
 	}
-	// ---------------------- Scoperta dell'attuale Leader ----------------------
+	// ------------ Scoperta dell'attuale Leader ----------------
 	n.startElection()
-
 	// ------------ Avvio heartBeatRoutine per contattare periodicamente il Leader ------------
-	go n.heartBeatRoutine()
-
-	// ------------- Avvio goRoutine per simulare il crash ------------------
+	n.startHeartBeatRoutine()
+	// ------------ Avvio goRoutine per simulare il crash ------------------
 	go emulateCrash(n, listener)
 	return
 }
@@ -233,32 +225,31 @@ func (n *Node) start() {
 // Meccanismo di Failure Detection:
 // Contattare il nodo leader periodicamente (Invocazione del metodo remoto: HEARTBEAT)
 func (n *Node) heartBeatRoutine() {
-	fmt.Printf("\nNodo %d, heartBeatRoutine avviata\n", n.ID)
+	fmt.Printf("\n -------- Nodo %d, heartBeatRoutine avviata --------\n", n.ID)
+	randSource := rand.NewSource(time.Now().UnixNano())
+	randGen := rand.New(randSource)
 	for hbState.active {
 		select {
-		case <-hbState.interrupt:
+		case <-hbState.interrupt: //eliminare utilizzo del canale
 			// heartBeatRoutine è stata interrotta
 			fmt.Println("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
 			return
-		default:
-			// Continua con heartBeatRoutine
-			// Verifica se il nodo leader è raggiungibile
-			if !n.sendHeartBeatMessage() {
-				// Se il leader non è raggiungibile, avvia un'elezione
-				leaderID = -1
-				leaderAddress = ""
-				go n.startElection()
-				// interruptHeartBeatRoutine() PROVA
-				return
-			}
+		default: // Continua con heartBeatRoutine
 			// Attendi un intervallo casuale prima di effettuare un nuovo heartbeat
-			randomSeconds := rand.Intn(20-1) + 1
+			randomSeconds := randGen.Intn(5-1) + 1
 			interval := time.Duration(randomSeconds) * time.Second
 			timer := time.NewTimer(interval)
 			<-timer.C
+			// Verifica se il nodo leader è raggiungibile
+			if !n.sendHeartBeatMessage() {
+				//interruptHeartBeatRoutine()
+				leaderID = -1
+				leaderAddress = ""
+				go n.startElection() // Avvia un'elezione
+			}
 		}
 	}
-	fmt.Printf("\nNodo %d, heartBeatRoutine interrotta\n", n.ID)
+	fmt.Printf("\n -------- Nodo %d, heartBeatRoutine interrotta --------\n", n.ID)
 }
 
 // Metodo per contattare il nodo leader tramite la chiamata rpc HEARTBEAT esposta dai nodi
@@ -308,13 +299,15 @@ func interruptHeartBeatRoutine() {
 	}
 }
 
-// Funzione per ripristinare heartBeatRoutine
-func (n *Node) restoreHeartBeatRoutine() {
+// Funzione per ripristinare heartBeatRoutine se non è attiva. (Per impedire di attivarne più di una)
+func (n *Node) startHeartBeatRoutine() {
 	hbStateMutex.Lock()
-	hbState.active = true
-	hbState.interrupt = make(chan struct{})
-	defer hbStateMutex.Unlock()
-	go n.heartBeatRoutine()
+	if hbState.active == false {
+		hbState.active = true
+		hbState.interrupt = make(chan struct{})
+		go n.heartBeatRoutine()
+	}
+	hbStateMutex.Unlock()
 }
 
 // Metodo per avviare un processo di elezione,
@@ -343,7 +336,7 @@ func (n *Node) startElection() {
 	}
 	// ---------- Avvia un timer per attendere messaggi di tipo STOP ------------
 	if i != 0 {
-		time.Sleep(5 * time.Second)
+		time.Sleep(time.Duration(1) * time.Second)
 		// ---------- Se l'elezione è stata interrotta, termina la funzione -------------
 		electionMutex.Lock()
 		if !election {
@@ -358,7 +351,7 @@ func (n *Node) startElection() {
 	leaderID = n.ID
 	leaderAddress = n.IPAddress + ":" + strconv.Itoa(n.Port)
 	go n.sendCoordinatorMessages()
-	go n.restoreHeartBeatRoutine()
+	//go n.startHeartBeatRoutine()
 	// ---------------- Imposto election come false, elezione terminata --------------
 	electionMutex.Lock()
 	election = false // PROVA: SPOSTATO SOTTO LA PRINT, INVECE CHE PRIMA
@@ -390,7 +383,6 @@ func (n *Node) sendElectionMessage(node Node) bool {
 	return true
 }
 
-// Invoca la procedura remota COORDINATOR su tutti i nodi nella nodeList per notificare il nuovo Leader
 // Invoca la procedura remota COORDINATOR su tutti i nodi nella nodeList per notificare il nuovo Leader
 func (n *Node) sendCoordinatorMessages() {
 	// Itera su tutti i nodi nella nodeList
@@ -467,26 +459,28 @@ func findAvailablePort() (int, error) {
 // un ciclo for che genera un numero random(compreso tra 1 e Numero definito come variabile globale)
 // ogni 5 secondi, se il numero generato è uguale a 1, il nodo esegue lo switch di stato (Crashed oppure Attivo)
 func emulateCrash(node *Node, listener net.Listener) {
+	// Inizializza il generatore di numeri casuali con un seme univoco
+	randSource := rand.NewSource(time.Now().UnixNano())
+	randGen := rand.New(randSource)
 	active := true // Variabile booleana per tenere traccia dello stato del nodo (true = attivo, false = in crash)
 	for {
 		time.Sleep(5 * time.Second) // Attendi 5 secondi prima di ogni iterazione
-		// Genera un numero random tra 0 e 20
-		randomNum := rand.Intn(21)
+		// Genera un numero random tra 0 e 10
+		randomNum := randGen.Intn(11)
 		// Se il numero generato è 0, cambia lo stato del nodo da attivo a in crash o viceversa
 		if randomNum == 0 {
 			if active {
+				leaderID = -1 // Cambio valori del leader perché non saranno più validi al momento del rientro
+				leaderAddress = ""
+				//interruptHeartBeatRoutine() // Interrompi heartBeatRoutine per evitare che il nodo comunichi con il Leader
 				// Cambia lo stato del nodo da attivo a in crash
+				active = false
 				// Interrompi il listener RPC
 				err := listener.Close()
 				if err != nil {
 				}
 				fmt.Println(" \n-------------------- IL NODO E' IN CRASH --------------------\n ")
-				// Interrompi heartBeatRoutine per evitare che il nodo comunichi con il Leader
-				interruptHeartBeatRoutine()
-				// Cambio valori del leader perché non saranno più validi al momento del rientro
-				leaderID = -1
-				leaderAddress = ""
-				active = false
+
 			} else {
 				// Cambia lo stato del nodo da in crash ad attivo
 				fmt.Println(" \n-------------------- IL NODO E' ATTIVO ---------------------\n ")
@@ -503,7 +497,6 @@ func emulateCrash(node *Node, listener net.Listener) {
 				go rpc.Accept(listener)
 
 				// CONOSCO I NODI NELLA RETE E SONO REGISTRATO SULLA RETE, NON DEVO ESEGUIRE FUNZIONE DI START
-				//
 				// NON CONOSCO IL NUOVO LEADER DELLA RETE -> Inizio un elezione
 				node.startElection()
 			}
