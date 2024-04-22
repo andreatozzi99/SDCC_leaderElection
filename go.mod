@@ -1,3 +1,3 @@
-module SDCC_leaderElection
+module main
 
 go 1.19

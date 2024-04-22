@@ -8,7 +8,6 @@ import (
 	"sync"
 )
 
-// Node Struttura per rappresentare un nodo
 type Node struct {
 	ID        int
 	IPAddress string
