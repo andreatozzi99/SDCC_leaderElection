@@ -24,6 +24,8 @@ var (
 	hbStateMutex  sync.Mutex // Lucchetto per l'accesso alla variabile hbState
 )
 
+//------------------------------------------------------------------------------------------
+
 // Node Struttura per rappresentare un nodo
 type Node struct {
 	ID        int
@@ -39,19 +41,45 @@ func (n *Node) HEARTBEAT(senderID int, reply *bool) error {
 }
 
 func main() {
-	// Creazione struttura nodo
-	node := &Node{
-		ID:        -1, // Per il nodeRegistry, che assegnerà un nuovo ID
-		IPAddress: localAddress,
-	}
-	// Genera una porta casuale disponibile per il nodo
-	node.Port, _ = findAvailablePort()
-	if node.Port == 0 {
-		fmt.Println("Errore nella ricerca di una porta")
+	// Creazione del nodo o del RaftNode in base all'algoritmo di elezione
+	var node interface{}
+	if electionAlg == "Bully" {
+		node = &Node{
+			ID:        -1, // Per il nodeRegistry, che assegnerà un nuovo ID
+			IPAddress: localAddress,
+		}
+	} else if electionAlg == "Raft" {
+		node = &RaftNode{
+			ID:          -1, // Per il nodeRegistry, che assegnerà un nuovo ID
+			IPAddress:   localAddress,
+			CurrentTerm: 0,
+			VotedFor:    -1,
+		}
+	} else {
+		fmt.Println("Algoritmo di elezione non supportato:", electionAlg)
 		return
 	}
-	node.start() // Avvio nodo (Ingresso nella rete tramite nodeRegistry ed esposizione dei servizi remoti del nodo)
-	select {}    // Mantiene il programma in esecuzione
+
+	// Verifica il tipo di nodo e imposta la porta
+	switch n := node.(type) {
+	case *Node:
+		port, err := findAvailablePort()
+		if err != nil {
+			fmt.Println("Errore nella ricerca di una porta:", err)
+			return
+		}
+		n.Port = port
+		n.start()
+	case *RaftNode:
+		port, err := findAvailablePort()
+		if err != nil {
+			fmt.Println("Errore nella ricerca di una porta:", err)
+			return
+		}
+		n.Port = port
+		n.start()
+	}
+	select {} // Mantiene il programma in esecuzione
 }
 
 // Metodo per avviare il nodo e registrarne l'indirizzo nel server di registrazione

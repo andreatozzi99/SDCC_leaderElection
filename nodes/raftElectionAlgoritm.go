@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"net/rpc"
 	"strconv"
 	"time"
@@ -18,43 +19,15 @@ import (
 // quindi presume che non ci sia più un leader in carica.
 // Inizia l'elezione aumentando il contatore dei termini, votando per se stesso come nuovo leader e inviando un messaggio
 // a tutti gli altri nodo richiedendo il loro voto. Un nodo voterà solo una volta per mandato, in base all'ordine di arrivo.
-// Se un candidato riceve un messaggio da un altro nodo con un numero di termine superiore al termine corrente del candidato,
+// Se un candidato riceve un messaggio da un altro nodo con un numero di mandato superiore al mandato corrente del candidato,
 // l'elezione del candidato viene sconfitta e il candidato si trasforma in un follower e riconosce il leader come legittimo.
 // Se un candidato riceve la maggioranza dei voti, diventa il nuovo leader.
 // Se nessuna delle due cose accade, ad esempio a causa di un voto disgiunto, inizia un nuovo mandato e inizia una nuova elezione.
 //
 // Raft utilizza un timeout elettorale casuale per garantire che i problemi di voto diviso vengano risolti rapidamente.
-// Questo dovrebbe ridurre la possibilità di un voto disgiunto perché i nodo non diventeranno candidati allo stesso tempo:
+// Questo dovrebbe ridurre la possibilità di un voto disgiunto perché i nodi non diventeranno candidati allo stesso tempo:
 // un singolo nodo andrà in timeout, vincerà le elezioni,
 // quindi diventerà leader e invierà messaggi heartbeat ad altri nodo prima che uno qualsiasi dei follower possa diventare candidato.
-*/
-// ---------------- Scheletro algoritmo -------------------
-/*
-Funzione InizioElezione():
-	Se non ricevo comunicazioni dal leader per un tempo superiore al timeout:
-		Diventa un candidato
-		Incrementa il termine corrente
-		Vota per te stesso
-		Invia richieste di voto agli altri nodo
-		Avvia un timeout di attesa per le risposte
-
-Funzione RiceviMessaggioVoto(messaggio):
-	Se il termine del messaggio è maggiore del termine corrente:
-		Diventa follower
-		Aggiorna il termine corrente
-		Riconosci il leader come legittimo
-		Interrompi l'elezione attuale
-	Altrimenti:
-		Ignora il messaggio
-
-Funzione RiceviRispostaVoto(risposta):
-	Se ricevo una risposta positiva dalla maggioranza dei nodi:
-		Diventa il nuovo leader
-		Interrompi l'elezione attuale
-		Se scade il timeout di attesa:
-			Se non ho ricevuto la maggioranza dei voti:
-				Inizia una nuova elezione
-			Interrompi l'elezione attuale
 */
 // ----------------- Tempistiche -----------------------------
 /* Tempistica e disponibilità
@@ -62,7 +35,7 @@ Il tempismo è fondamentale in Raft per eleggere e mantenere un leader stabile n
 al fine di avere una perfetta disponibilità del cluster.
 La stabilità è garantita dal rispetto dei requisiti di temporizzazione dell'algoritmo:
 	broadcastTime << electionTimeout << MTBF
-broadcastTime è il tempo medio impiegato da un nodo per inviare una richiesta a tutti i nodo del cluster e ricevere le risposte.
+broadcastTime è il tempo medio impiegato da un nodo per inviare una richiesta a tutti i nodi del cluster e ricevere le risposte.
 È relativo all'infrastruttura utilizzata.
 MTBF (Mean Time Between Failures) è il tempo medio tra i guasti per un nodo. È anche relativo all'infrastruttura.
 electionTimeout è lo stesso descritto nella sezione Elezione del leader. È qualcosa che il programmatore deve scegliere.
@@ -88,8 +61,8 @@ type HeartBeatReply struct {
 
 // RequestVoteArgs contiene gli argomenti per la richiesta di voto
 type RequestVoteArgs struct {
-	Term        int // Termine corrente del candidato
-	CandidateID int // ID del candidato
+	node Node
+	Term int // Termine corrente del candidato
 }
 
 // RequestVoteReply contiene la risposta alla richiesta di voto
@@ -100,50 +73,68 @@ type RequestVoteReply struct {
 
 // RaftNode ----------------------------
 type RaftNode struct {
-	ID              int
-	IPAddress       string
-	Port            int
-	CurrentTerm     int
-	VotedFor        int
-	electionTimeout time.Duration
+	ID          int
+	IPAddress   string
+	Port        int
+	CurrentTerm int
+	VotedFor    int
 }
 
-// --------------------- Metodi Esposti per RPC (Messaggi scambiabili tra nodi) ----------------------------
+// --------------------- Metodi Esposti per RPC (Messaggi scambiati tra nodi) ----------------------------
 
-// REQUESTVOTE Gestisce la ricezione di un messaggio di Richiesta voto da parte di un altro nodo
+// REQUESTVOTE gestisce la ricezione di un messaggio di Richiesta voto da parte di un altro nodo
 func (n *RaftNode) REQUESTVOTE(args RequestVoteArgs, reply *RequestVoteReply) error {
-	electionMutex.Lock()
-	defer electionMutex.Unlock()
-
-	// Se il termine del messaggio è maggiore del termine corrente
-	// ? Dovrei verificare anche che VotedFor sia != da -1, non posso votare per più nodi nello stesso term
+	// Aggiungo il nodo alla lista dei nodi conosciuti
+	go addNodeInNodeList(args.node)
+	fmt.Printf("Node %d <-- REQUESTVOTE Node %d\n", n.ID, args.node.ID)
+	// Se il termine del messaggio è maggiore del termine corrente del nodo locale
 	if args.Term > n.CurrentTerm {
-		n.becomeFollower(n.CurrentTerm) // Diventa follower
-		n.CurrentTerm = args.Term
-		n.VotedFor = -1 // Resetta il voto
+		// Aggiorna il termine corrente e diventa follower
+		n.becomeFollower(args.Term)
+		// Verifica se il nodo locale ha già votato per un candidato in un termine precedente
+		if n.VotedFor != -1 {
+			// Se ha già votato per un altro candidato, rifiuta la richiesta di voto
+			*reply = RequestVoteReply{
+				Term:        n.CurrentTerm,
+				VoteGranted: false, // Non concede il voto
+			}
+			return nil
+		}
+		// Se non ha votato oppure ha già votato per il mittente, concede il voto
+		n.VotedFor = args.node.ID
 		*reply = RequestVoteReply{
 			Term:        n.CurrentTerm,
 			VoteGranted: true, // Concede il voto
 		}
 	} else {
-		// Ignora il messaggio
+		if n.VotedFor != -1 {
+			// Se ha già votato per un altro candidato, rifiuta la richiesta di voto
+			*reply = RequestVoteReply{
+				Term:        n.CurrentTerm,
+				VoteGranted: false, // Non concede il voto
+			}
+			return nil
+		}
+		// Se non ha votato oppure ha già votato per il mittente, concede il voto
+		n.VotedFor = args.node.ID
 		*reply = RequestVoteReply{
 			Term:        n.CurrentTerm,
-			VoteGranted: false, // Non concede il voto
+			VoteGranted: true, // Concede il voto
 		}
+		n.becomeFollower(args.Term)
 	}
 	return nil
 }
 
 // HEARTBEAT gestisce la ricezione di un messaggio di HeartBeat da parte di un altro nodo
 func (n *RaftNode) HEARTBEAT(args HeartBeatArgs, reply *HeartBeatReply) error {
+	fmt.Printf("Node %d <-- HEARTBEAT Leader %d\n", n.ID, args.LeaderID)
 	electionMutex.Lock()
 	defer electionMutex.Unlock()
-
+	resetElectionTimer() // Resetta il timer di elezione
 	// Se il termine del messaggio è maggiore del termine corrente
 	if args.Term > n.CurrentTerm {
 		n.becomeFollower(args.Term) // Diventa follower e aggiorna il termine corrente
-		resetElectionTimer()        // Resetta il timer di elezione
 		*reply = HeartBeatReply{
 			Term:    n.CurrentTerm,
 			Success: true, // Accetta l'HeartBeat
@@ -158,15 +149,128 @@ func (n *RaftNode) HEARTBEAT(args HeartBeatArgs, reply *HeartBeatReply) error {
 	return nil
 }
 
+// Metodo per avviare il nodo e registrarne l'indirizzo nel server di registrazione
+// e recuperare la lista dei nodi in rete
+func (n *RaftNode) start() {
+	// ------------- Esposizione dei metodi per le chiamate RPC -------------
+	err := rpc.Register(n)
+	if err != nil {
+		fmt.Println("Errore durante la registrazione dei metodi RPC:", err)
+		return
+	}
+	// ------ Creazione listener RPC ------
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", n.Port))
+	if err != nil {
+		fmt.Println("Errore durante la creazione del listener RPC:", err)
+		return
+	}
+	// -------- Accetta le connessioni per RPC in arrivo in una goroutine ------------
+	fmt.Printf("Nodo in ascolto su porta %d per le chiamate RPC...\n", n.Port)
+	go rpc.Accept(listener)
+	// ------------- Ingresso nella rete tramite Node Registry ------------------
+	client, err := rpc.Dial("tcp", serverAddressAndPort)
+	if err != nil {
+		fmt.Println("Errore nella connessione al NodeRegistry server:", err)
+		return
+	}
+	// ---- Chiusura connessione con defer ----
+	defer func(client *rpc.Client) {
+		err := client.Close()
+		if err != nil {
+			fmt.Println("Errore nella chiusura della connessione con il NodeRegistry server:", err)
+			return
+		}
+	}(client)
+	// ---------- RPC per Registrare il nodo --------------
+	var reply int
+	// ? Devo creare una struttura node, impostare i parametri a partire da quelli di n, e inviare quelli al NodeRegistry
+	node := &Node{
+		ID:        -1, // Per il nodeRegistry, che assegnerà un nuovo ID
+		IPAddress: localAddress,
+		Port:      n.Port,
+	}
+	err = client.Call("NodeRegistry.RegisterNode", node, &reply)
+	if err != nil {
+		fmt.Println("Errore durante la registrazione del nodo:", err)
+		return
+	}
+	if reply == -1 {
+		fmt.Println("Il server di registrazione ha rifiutato la registrazione del nodo")
+		return
+	}
+	// Imposto il mio nuovo ID (restituito dalla chiamata rpc al nodeRegistry)
+	n.ID = reply
+	// Visualizza l'ID e la porta assegnati al nodo
+	fmt.Printf("-------- Registrato sulla rete. ID %d: Porta  %d --------\n", n.ID, n.Port)
+
+	// ---------- RPC per ricevere la lista dei nodi nella rete  ----------
+	err = client.Call("NodeRegistry.GetRegisteredNodes", n, &nodeList)
+	if err != nil {
+		fmt.Println("Errore durante la richiesta della lista dei nodi:", err)
+		return
+	}
+	// ------------ Divento un candidato, per scoprire la situazione della rete ----------------
+	go n.becomeCandidate()
+	return
+}
+
+// Funzione InizioElezione(): Avvia un'elezione se non ricevo comunicazioni dal leader per un tempo superiore al timeout
+func (n *RaftNode) startRaftElection() {
+	fmt.Printf("Nodo %d Started RAFT-election\n", n.ID)
+	electionMutex.Lock()
+	if election {
+		electionMutex.Unlock()
+		return // Se sono già in corso elezioni, termina
+	}
+	electionMutex.Unlock()
+	// --------------- Avvia elezione ----------------
+	election = true
+
+	// Incrementa il termine corrente e vota per se stesso
+	n.CurrentTerm++
+	n.VotedFor = n.ID
+
+	// Contatore per i voti ricevuti
+	votesReceived := 1 // Voto per me stesso
+
+	// --------- Invia richieste di voto agli altri nodi --------------
+	for _, node := range nodeList {
+		if node.ID != n.ID {
+			// Invia la richiesta di voto in una goroutine
+			go n.sendRequestVoteMessage(node, &votesReceived)
+		}
+	}
+
+	// Avvia un timeout di attesa per le risposte
+	time.Sleep(electionTimeout)
+	electionMutex.Lock()
+	if election == false { // Elezione interrotta durante il periodo di timeout
+
+	}
+	if votesReceived < len(nodeList)/2 {
+		election = false // Se non ha ricevuto la maggioranza dei voti, avvia una nuova elezione
+		n.startRaftElection()
+		return
+	}
+	// ------- Diventa Leader ----------
+	n.becomeLeader()
+}
+
 // Funzione InviaHeartBeat(): Invia un messaggio di HeartBeat agli altri nodi
 func (n *RaftNode) sendHeartBeatRoutine() {
+	fmt.Printf("Leader %d | Start Heart-Beat Routine\n", n.ID)
 	for {
+		if !hbState {
+			return
+		}
+		fmt.Printf("Leader %d | Contacting all followers...\n", n.ID)
 		for _, node := range nodeList {
 			if node.ID != n.ID {
 				// Invia il messaggio di HeartBeat in una goroutine
 				go n.sendHeartBeatMessage(node)
 			}
 		}
+		time.Sleep(time.Millisecond * 100)
 	}
 }
 
@@ -202,42 +306,6 @@ func (n *RaftNode) sendHeartBeatMessage(node Node) {
 	}
 }
 
-// Funzione InizioElezione(): Avvia un'elezione se non ricevo comunicazioni dal leader per un tempo superiore al timeout
-func (n *RaftNode) startRaftElection() {
-	electionMutex.Lock()
-	if election {
-		electionMutex.Unlock()
-		return // Se sono già in corso elezioni, termina
-	}
-	electionMutex.Unlock()
-	// --------------- Avvia elezione ----------------
-	election = true
-
-	// Incrementa il termine corrente e vota per se stesso
-	n.CurrentTerm++
-	n.VotedFor = n.ID
-
-	// Contatore per i voti ricevuti
-	votesReceived := 1 // Voto per me stesso
-
-	// --------- Invia richieste di voto agli altri nodi --------------
-	for _, node := range nodeList {
-		if node.ID != n.ID {
-			// Invia la richiesta di voto in una goroutine
-			go n.sendRequestVoteMessage(node, &votesReceived)
-		}
-	}
-
-	// Avvia un timeout di attesa per le risposte
-	time.Sleep(n.electionTimeout)
-	if votesReceived <= len(nodeList)/2 {
-		election = false // Se non ha ricevuto la maggioranza dei voti, avvia una nuova elezione
-		n.startRaftElection()
-	}
-	// ------- Diventa Leader ----------
-	n.becomeLeader()
-}
-
 func (n *RaftNode) sendRequestVoteMessage(node Node, votesReceived *int) {
 	// ---------------- Connessione al nodo remoto -----------------
 	client, err := rpc.Dial("tcp", node.IPAddress+":"+strconv.Itoa(node.Port))
@@ -251,12 +319,17 @@ func (n *RaftNode) sendRequestVoteMessage(node Node, votesReceived *int) {
 		}
 	}(client)
 	// ------------------- Effettua la chiamata RPC per richiedere il voto -----------------
+	senderNode := Node{
+		IPAddress: n.IPAddress,
+		Port:      n.Port,
+		ID:        n.ID,
+	}
 	args := RequestVoteArgs{
-		Term:        n.CurrentTerm,
-		CandidateID: n.ID,
+		Term: n.CurrentTerm,
+		node: senderNode,
 	}
 	var reply RequestVoteReply
-	err = client.Call("Node.REQUESTVOTE", args, &reply)
+	err = client.Call("RaftNode.REQUESTVOTE", args, &reply)
 	if err != nil {
 		fmt.Printf("Errore durante la richiesta di voto al nodo %d: %v\n", node.ID, err)
 		return
@@ -270,7 +343,6 @@ func (n *RaftNode) sendRequestVoteMessage(node Node, votesReceived *int) {
 	if reply.VoteGranted {
 		// Incrementa il conteggio dei voti ricevuti
 		*votesReceived++
-
 		// Verifica se è stata ricevuta la maggioranza dei voti
 		if *votesReceived > len(nodeList)/2 {
 			// Diventa il nuovo leader
@@ -279,21 +351,31 @@ func (n *RaftNode) sendRequestVoteMessage(node Node, votesReceived *int) {
 	}
 }
 
-// Funzione becomeFollower(): Trasforma il nodo in uno stato di Follower
+// Funzione becomeFollower(): Avvia la routine di un nodo follower
 func (n *RaftNode) becomeFollower(term int) {
+	fmt.Printf("Node %d I'm a follower \n", n.ID)
+	hbState = false
+	electionMutex.Lock()
+	election = false
+	electionMutex.Unlock()
 	n.CurrentTerm = term
 	n.VotedFor = -1
 }
 
-// Funzione becomeLeader(): Trasforma il nodo in uno stato di Leader
+// Funzione becomeLeader(): Avvia la routine di un nodo leader
 func (n *RaftNode) becomeLeader() {
+	fmt.Printf("Node %d I'm LEADER \n", n.ID)
+	electionMutex.Lock()
+	election = false
+	electionMutex.Unlock()
 	n.VotedFor = -1
 	// Inizia a inviare messaggi di HeartBeat agli altri nodi
-	n.sendHeartBeatRoutine()
+	go n.sendHeartBeatRoutine()
 }
 
-// Funzione becomeCandidate(): Trasforma il nodo in uno stato di Candidato
+// Funzione becomeCandidate(): Avvia la routine di un nodo candidato
 func (n *RaftNode) becomeCandidate() {
+	fmt.Printf("Node %d I'm a Candidate \n", n.ID)
 	// Incrementa il termine corrente e vota per se stesso
 	n.CurrentTerm++
 	n.VotedFor = n.ID
@@ -303,5 +385,6 @@ func (n *RaftNode) becomeCandidate() {
 
 // Funzione resetElectionTimer(): Resetta il timer di elezione
 func resetElectionTimer() {
+	fmt.Printf("Restart Election Timer: DO NOTHING AT THE MOMENT\n")
 	// TODO
 }
