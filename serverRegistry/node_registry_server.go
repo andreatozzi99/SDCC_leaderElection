@@ -55,7 +55,8 @@ func (nr *NodeRegistry) GetRegisteredNodes(input Node, reply *[]Node) error {
 func main() {
 	// Inizializzazione del registro dei nodi
 	registry := &NodeRegistry{
-		nodes: make([]Node, 0), // Inizializza con slice vuota
+		nodes:  make([]Node, 0), // Inizializza con slice vuota
+		lastID: 0,
 	}
 
 	// Creazione di un nuovo server RPC
