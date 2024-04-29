@@ -2,48 +2,12 @@ package main
 
 import (
 	"fmt"
+	"math/rand"
 	"net"
 	"net/rpc"
 	"strconv"
 	"time"
 )
-
-// --------------- Descrizione Algoritmo --------------------
-/* Quando è necessario eleggere un nuovo Leader, nel cluster viene avviato un nuovo mandato(Term).
-// Un mandato è un periodo di tempo arbitrario sul nodo per il quale deve essere eletto un nuovo leader.
-// Ogni mandato inizia con l'elezione di un leader.
-// Se l'elezione viene completata con successo (cioè viene eletto un singolo leader), il mandato continua con le normali operazioni orchestrate dal nuovo leader.
-// Se l'elezione è un fallimento, inizia un nuovo mandato, con una nuova elezione.
-// L'elezione di un leader viene avviata da un nodo, nello stato "Candidato"
-// Un nodo diventa un candidato se non riceve alcuna comunicazione dal leader per un periodo chiamato timeout elettorale,
-// quindi presume che non ci sia più un leader in carica.
-// Inizia l'elezione aumentando il contatore dei termini, votando per se stesso come nuovo leader e inviando un messaggio
-// a tutti gli altri nodo richiedendo il loro voto. Un nodo voterà solo una volta per mandato, in base all'ordine di arrivo.
-// Se un candidato riceve un messaggio da un altro nodo con un numero di mandato superiore al mandato corrente del candidato,
-// l'elezione del candidato viene sconfitta e il candidato si trasforma in un follower e riconosce il leader come legittimo.
-// Se un candidato riceve la maggioranza dei voti, diventa il nuovo leader.
-// Se nessuna delle due cose accade, ad esempio a causa di un voto disgiunto, inizia un nuovo mandato e inizia una nuova elezione.
-//
-// Raft utilizza un timeout elettorale casuale per garantire che i problemi di voto diviso vengano risolti rapidamente.
-// Questo dovrebbe ridurre la possibilità di un voto disgiunto perché i nodi non diventeranno candidati allo stesso tempo:
-// un singolo nodo andrà in timeout, vincerà le elezioni,
-// quindi diventerà leader e invierà messaggi heartbeat ad altri nodo prima che uno qualsiasi dei follower possa diventare candidato.
-*/
-// ----------------- Tempistiche -----------------------------
-/* Tempistica e disponibilità
-Il tempismo è fondamentale in Raft per eleggere e mantenere un leader stabile nel tempo,
-al fine di avere una perfetta disponibilità del cluster.
-La stabilità è garantita dal rispetto dei requisiti di temporizzazione dell'algoritmo:
-	broadcastTime << electionTimeout << MTBF
-broadcastTime è il tempo medio impiegato da un nodo per inviare una richiesta a tutti i nodi del cluster e ricevere le risposte.
-È relativo all'infrastruttura utilizzata.
-MTBF (Mean Time Between Failures) è il tempo medio tra i guasti per un nodo. È anche relativo all'infrastruttura.
-electionTimeout è lo stesso descritto nella sezione Elezione del leader. È qualcosa che il programmatore deve scegliere.
-I numeri tipici per questi valori possono essere compresi tra 0,5 ms e 20 ms per broadcastTime,
-il che implica che il programmatore imposta electionTimeout tra 10 ms e 500 ms.
-Possono essere necessarie diverse settimane o mesi tra un errore di un singolo nodo,
-il che significa che i valori sono sufficienti per un cluster stabile.
-*/
 
 // ---------------- Strutture: Argomenti e valori di ritorno delle Chiamate RPC ------------------
 
@@ -80,6 +44,8 @@ type RaftNode struct {
 	VotedFor    int
 }
 
+var ElectionTimeOut = 0
+
 // --------------------- Metodi Esposti per RPC (Messaggi scambiati tra nodi) ----------------------------
 
 // REQUESTVOTE gestisce la ricezione di un messaggio di Richiesta voto da parte di un altro nodo
@@ -105,14 +71,14 @@ func (n *RaftNode) REQUESTVOTE(args RequestVoteArgs, reply *RequestVoteReply) er
 			fmt.Println("Vote: No")
 			return nil
 		}
-		n.VotedFor = args.Node.ID
-		*reply = RequestVoteReply{
-			Term:        n.CurrentTerm,
-			VoteGranted: true, // Concede il voto
-		}
-		fmt.Println("Vote: Yes")
 		n.becomeFollower(args.Node.CurrentTerm)
 	}
+	n.VotedFor = args.Node.ID
+	*reply = RequestVoteReply{
+		Term:        n.CurrentTerm,
+		VoteGranted: true, // Concede il voto
+	}
+	fmt.Println("Vote: Yes")
 	return nil
 }
 
@@ -199,8 +165,10 @@ func (n *RaftNode) start() {
 		fmt.Println("Errore durante la richiesta della lista dei nodi:", err)
 		return
 	}
-	// ------------ Divento un candidato, per scoprire la situazione della rete ----------------
-	// ------------ Gli altri nodi non sanno della mia esistenza, devo almeno contattarli -----
+	// ------------ Avvio routine che attende heartBeat del leader (failure detection) ---------
+	go n.resetElectionTimer()
+	// ------------ Divento un candidato, per scoprire la situazione della rete, non conosco il term attuale nella rete,
+	// Gli altri nodi non sanno della mia esistenza, devo almeno contattarli ------------------------------------------
 	go n.becomeCandidate()
 	return
 }
@@ -259,7 +227,7 @@ func (n *RaftNode) sendHeartBeatRoutine() {
 				go n.sendHeartBeatMessage(node)
 			}
 		}
-		time.Sleep(time.Millisecond * 100)
+		time.Sleep(time.Millisecond * 1000)
 	}
 }
 
@@ -359,8 +327,39 @@ func (n *RaftNode) becomeCandidate() {
 	n.startRaftElection()
 }
 
-// Funzione resetElectionTimer(): Resetta il timer di elezione
-func resetElectionTimer() {
-	fmt.Printf("Restart Election Timer: DO NOTHING AT THE MOMENT\n")
-	// TODO
+var (
+	resetTimerCh = make(chan struct{}, 1) // Canale per il controllo del reset del timer
+)
+
+// Funzione resetElectionTimer: Resetta il timer di elezione
+func (n *RaftNode) resetElectionTimer() {
+	// Invia un segnale al canale per il controllo del reset del timer
+	select {
+	case resetTimerCh <- struct{}{}:
+	default:
+		// Se il canale è già occupato, significa che un reset è già in corso,
+		// quindi non è necessario eseguirne uno nuovo
+		return
+	}
+
+	// Genera un numero casuale compreso tra electionTimerMin e electionTimerMax
+	rand.Seed(time.Now().UnixNano())
+	randomDuration := time.Duration(rand.Intn(electionTimerMax-electionTimerMin)+electionTimerMin) * time.Second
+
+	// Crea un timer con la durata casuale generata
+	timer := time.NewTimer(randomDuration)
+
+	// Avvia una goroutine per attendere il timer e avviare un'elezione quando scade
+	go func() {
+		<-timer.C
+		fmt.Println("Election timer expired. Starting election...")
+		// Avvia un'elezione
+		// n.startRaftElection()
+
+		// Dopo che il timer è scaduto, attendi il prossimo reset del timer
+		<-resetTimerCh
+	}()
+
+	// Stampa il tempo rimanente prima che scada il timer (per scopi di debug)
+	fmt.Printf("Election timer set to %v\n", randomDuration)
 }

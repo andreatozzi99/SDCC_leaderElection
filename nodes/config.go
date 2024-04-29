@@ -10,5 +10,6 @@ const (
 	emulateLocalCrash    = false
 	crashProbability     = 10 // Valori da 0 a 99
 	maxRttTime           = 5  // Espresso in secondi
-	electionTimeout      = time.Millisecond * 5000
+	electionTimerMin     = time.Millisecond * 5000
+	electionTimerMax     = time.Millisecond * 15000
 )
