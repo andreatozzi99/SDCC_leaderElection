@@ -44,8 +44,6 @@ type RaftNode struct {
 	VotedFor    int
 }
 
-var ElectionTimeOut = 0
-
 // --------------------- Metodi Esposti per RPC (Messaggi scambiati tra nodi) ----------------------------
 
 // REQUESTVOTE gestisce la ricezione di un messaggio di Richiesta voto da parte di un altro nodo
@@ -71,7 +69,6 @@ func (n *RaftNode) REQUESTVOTE(args RequestVoteArgs, reply *RequestVoteReply) er
 			fmt.Println("Vote: No")
 			return nil
 		}
-		n.becomeFollower(args.Node.CurrentTerm)
 	}
 	n.VotedFor = args.Node.ID
 	*reply = RequestVoteReply{
@@ -85,7 +82,7 @@ func (n *RaftNode) REQUESTVOTE(args RequestVoteArgs, reply *RequestVoteReply) er
 // HEARTBEAT gestisce la ricezione di un messaggio di HeartBeat da parte di un altro nodo
 func (n *RaftNode) HEARTBEAT(args HeartBeatArgs, reply *HeartBeatReply) error {
 	fmt.Printf("Node %d <-- HEARTBEAT from Leader %d\n", n.ID, args.LeaderID)
-	resetElectionTimer() // Resetta il timer di elezione
+	n.resetElectionTimer() // Resetta il timer di elezione
 	// Se il termine del messaggio è maggiore del termine corrente
 	if args.Term > n.CurrentTerm {
 		n.becomeFollower(args.Term) // Diventa follower e aggiorna il termine corrente
@@ -165,8 +162,6 @@ func (n *RaftNode) start() {
 		fmt.Println("Errore durante la richiesta della lista dei nodi:", err)
 		return
 	}
-	// ------------ Avvio routine che attende heartBeat del leader (failure detection) ---------
-	go n.resetElectionTimer()
 	// ------------ Divento un candidato, per scoprire la situazione della rete, non conosco il term attuale nella rete,
 	// Gli altri nodi non sanno della mia esistenza, devo almeno contattarli ------------------------------------------
 	go n.becomeCandidate()
@@ -328,36 +323,27 @@ func (n *RaftNode) becomeCandidate() {
 }
 
 var (
-	resetTimerCh = make(chan struct{}, 1) // Canale per il controllo del reset del timer
+	electionTimer *time.Timer // Timer per il conteggio dell'elezione
+	randGen       = rand.New(rand.NewSource(time.Now().UnixNano()))
 )
 
-// Funzione resetElectionTimer: Resetta il timer di elezione
 func (n *RaftNode) resetElectionTimer() {
-	// Invia un segnale al canale per il controllo del reset del timer
-	select {
-	case resetTimerCh <- struct{}{}:
-	default:
-		// Se il canale è già occupato, significa che un reset è già in corso,
-		// quindi non è necessario eseguirne uno nuovo
-		return
+	// Resetta il timer di elezione se esiste già uno attivo
+	if electionTimer != nil {
+		electionTimer.Stop()
 	}
 
 	// Genera un numero casuale compreso tra electionTimerMin e electionTimerMax
-	rand.Seed(time.Now().UnixNano())
-	randomDuration := time.Duration(rand.Intn(electionTimerMax-electionTimerMin)+electionTimerMin) * time.Second
+	randomDuration := electionTimerMin + time.Duration(randGen.Int63n(int64(electionTimerMax-electionTimerMin)))
 
-	// Crea un timer con la durata casuale generata
-	timer := time.NewTimer(randomDuration)
+	// Crea un nuovo timer con la durata casuale generata
+	electionTimer = time.NewTimer(randomDuration)
 
 	// Avvia una goroutine per attendere il timer e avviare un'elezione quando scade
 	go func() {
-		<-timer.C
-		fmt.Println("Election timer expired. Starting election...")
-		// Avvia un'elezione
-		// n.startRaftElection()
-
-		// Dopo che il timer è scaduto, attendi il prossimo reset del timer
-		<-resetTimerCh
+		<-electionTimer.C
+		fmt.Println("Election timer expired")
+		n.startRaftElection()
 	}()
 
 	// Stampa il tempo rimanente prima che scada il timer (per scopi di debug)
