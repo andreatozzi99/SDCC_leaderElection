@@ -20,8 +20,8 @@ var (
 	leaderAddress = ""              // Indirizzo dell'attuale leader+Porta, inizialmente sconosciuto
 	election      = false           // True = Elezione in corso | False = Nessuna Elezione in corso
 	electionMutex sync.Mutex        // Lucchetto per l'accesso alla variabile election
-	hbState       = false
-	hbStateMutex  sync.Mutex // Lucchetto per l'accesso alla variabile hbState
+	hbState       = false           // True = HeartBeatRoutine in esecuzione | False = HeartBeatRoutine interrotta
+	hbStateMutex  sync.Mutex        // Lucchetto per l'accesso alla variabile hbState
 )
 
 //------------------------------------------------------------------------------------------
@@ -34,9 +34,10 @@ type Node struct {
 }
 
 // HEARTBEAT Utilizzato dai nodi nella rete sul Leader come meccanismo di Failure Detection
+// Funzione esportata per essere utilizzata come servizio RPC
 func (n *Node) HEARTBEAT(senderID int, reply *bool) error {
 	*reply = true // Se la funzione viene avviata, vuol dire che il nodo è funzionante
-	fmt.Printf("LEADER %d| <-- HEARTBEAT Nodo %d\n", n.ID, senderID)
+	fmt.Printf("%d LEADER | <-- HEARTBEAT Nodo %d\n", n.ID, senderID)
 	return nil
 }
 
@@ -77,7 +78,7 @@ func main() {
 			return
 		}
 		n.Port = port
-		n.start()
+		n.start() // Funziona anche per RaftNode, ma c'è replica di codice
 	}
 	select {} // Mantiene il programma in esecuzione
 }
@@ -99,6 +100,7 @@ func (n *Node) start() {
 	// -------- Accetta le connessioni per RPC in arrivo in una goroutine ------------
 	fmt.Printf("Nodo in ascolto su porta %d per le chiamate RPC...\n", n.Port)
 	go rpc.Accept(listener)
+
 	// ------------- Ingresso nella rete tramite Node Registry ------------------
 	client, err := rpc.Dial("tcp", serverAddressAndPort)
 	if err != nil {
@@ -113,9 +115,12 @@ func (n *Node) start() {
 		}
 	}(client)
 
-	// ---------- RPC per Registrare il nodo --------------
+	// --------------------- Chiamate RPC per Registrare il nodo ---------------------
 	var reply int
-	// ################# Nome servizio su file CONF ###################
+	// TODO ################# Nome servizio su file CONF ###################
+	if runInContainer {
+		n.IPAddress = containerAddress
+	}
 	err = client.Call("NodeRegistry.RegisterNode", n, &reply)
 	if err != nil {
 		fmt.Println("Errore durante la registrazione del nodo:", err)
@@ -131,23 +136,31 @@ func (n *Node) start() {
 	fmt.Printf("-------- Regisrato sulla rete. ID %d: Porta  %d --------\n", n.ID, n.Port)
 
 	// ---------- RPC per ricevere la lista dei nodi nella rete  ----------
-	// ############ Nome servizio su file CONF ###################
+	// TODO ############ Nome servizio su file CONF ###################
 	err = client.Call("NodeRegistry.GetRegisteredNodes", n, &nodeList)
 	if err != nil {
 		fmt.Println("Errore durante la richiesta della lista dei nodi:", err)
 		return
 	}
 	// ------------ Scoperta dell'attuale Leader ----------------
-	n.startBullyElection() // Dovrebbe variare in base all'algoritmo selezionato
+	switch electionAlg {
+	case "Bully":
+		n.startBullyElection()
+	case "Raft":
+		//todo implementazione Raft
+	}
+
 	// ------------ Avvio heartBeatRoutine per contattare periodicamente il Leader ------------
 	n.startHeartBeatRoutine()
 	// ------------ Avvio goRoutine per simulare il crash ------------------
-	go emulateCrash(n, listener)
+	if emulateLocalCrash {
+		go emulateCrash(n, listener)
+	}
 	return
 }
 
 // Meccanismo di Failure Detection:
-// Contatta il nodo leader periodicamente (Invocazione del metodo remoto: HEARTBEAT)
+// Contatta il nodo leader a intervalli casuali (Invocazione del metodo remoto: HEARTBEAT)
 func (n *Node) heartBeatRoutine() {
 	fmt.Printf("\n -------- Nodo %d, heartBeatRoutine avviata --------\n", n.ID)
 	randSource := rand.NewSource(time.Now().UnixNano())
@@ -165,6 +178,7 @@ func (n *Node) heartBeatRoutine() {
 			leaderID = -1
 			leaderAddress = ""
 			go n.startBullyElection() // Avvia un'elezione (posso sceglierla in base all'algoritmo selezionato)
+
 		}
 	}
 	fmt.Printf("\n -------- Nodo %d, heartBeatRoutine interrotta --------\n", n.ID)
@@ -274,7 +288,12 @@ func emulateCrash(node *Node, listener net.Listener) {
 
 				// CONOSCO I NODI NELLA RETE E SONO REGISTRATO SULLA RETE, NON DEVO ESEGUIRE FUNZIONE DI START
 				// NON CONOSCO IL NUOVO LEADER DELLA RETE -> Inizio un elezione
-				node.startBullyElection()
+				if electionAlg == "Bully" {
+					node.startBullyElection()
+				}
+				if electionAlg == "Raft" {
+					//todo implementazione Raft
+				}
 			}
 		}
 	}
@@ -297,8 +316,20 @@ func addNodeInNodeList(senderNode Node) {
 	}
 }
 
-// Funzione per trovare una porta disponibile casuale
+// Funzione per trovare una porta disponibile nel range prefissato
 func findAvailablePort() (int, error) {
+	for port := 30000; port <= 30100; port++ {
+		listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+		if err == nil {
+			defer listener.Close()
+			return port, nil
+		}
+	}
+	return 0, fmt.Errorf("nessuna porta disponibile nel range 30000-30100")
+}
+
+// Funzione per trovare una porta disponibile casuale
+func findAvailablePort2() (int, error) {
 	listener, err := net.Listen("tcp", ":0")
 	if err != nil {
 		return 0, err

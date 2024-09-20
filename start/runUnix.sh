@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Numero di nodi da avviare
-NUM_NODES=2
+NUM_NODES=4
 
 pkill konsole
 

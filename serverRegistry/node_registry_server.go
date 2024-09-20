@@ -21,37 +21,52 @@ type NodeRegistry struct {
 	mutex  sync.Mutex
 }
 
-// RegisterNode Metodo per registrare un nodo nel registro
+// RegisterNode Metodo per registrare un nodo nella rete se non è già presente
+// Funzione esportata per essere utilizzata come servizio RPC
 func (nr *NodeRegistry) RegisterNode(node Node, reply *int) error {
 	nr.mutex.Lock()
 	defer nr.mutex.Unlock()
 
-	// Incrementa l'ID solo se il nodo non ha già un ID assegnato
+	// Incrementa l'ID solo se il nodo non ha già un ID assegnato (node.ID = -1)
 	if node.ID == -1 {
 		nr.lastID++         // Incrementa l'ID
 		node.ID = nr.lastID // Assegna il nuovo ID al nodo
 	}
+	if node.ID > 0 {
+		// Controlla se il nodo è già registrato
+		for _, n := range nr.nodes {
+			if n.ID == node.ID {
+				fmt.Printf("\nNodo: %d già registrato \n", node.ID)
+				*reply = node.ID
+				return nil
+			}
+		}
+	}
 
-	nr.nodes = append(nr.nodes, node)
-	*reply = node.ID // Il valore di reply è l'ID del nodo che si sta registrando
+	// Aggiunge il nodo alla lista dei nodi registrati
+	nr.nodes = append(nr.nodes, node) // Aggiunge il nodo alla lista dei nodi registrati
+	*reply = node.ID                  // Il valore di reply è l'ID del nodo che si sta registrando
 	fmt.Printf("\nNodo: %d Registrato correttamente \n", node.ID)
 	go nr.printNodeList()
 	return nil
 }
 
-// GetRegisteredNodes Metodo per ottenere l'elenco dei nodi registrati
+// GetRegisteredNodes Metodo per ottenere l'elenco dei nodi registrati nella rete
+// Funzione esportata per essere utilizzata come servizio RPC
 func (nr *NodeRegistry) GetRegisteredNodes(input Node, reply *[]Node) error {
 	// Se la richiesta arriva da un nodo con ID > 0, allora è un nodo già registrato
 	if input.ID > 0 {
 		nr.mutex.Lock()
 		defer nr.mutex.Unlock()
-		*reply = nr.nodes
+		*reply = nr.nodes // Restituisce l'elenco dei nodi registrati
 		return nil
 	}
+	// Se la richiesta arriva da un nodo con ID = 0 o -1, allora è un nuovo nodo
+	// TODO Decidere cosa fare in questo caso, attualmente non genera problemi, è solo una sicurezza
 	return nil
 }
 
-// ######## Attualmente sulla porta 8080, AGGIUNGERE FILE CONFIGURAZIONE ######
+// ######## TODO Attualmente sulla porta 8080, AGGIUNGERE FILE CONFIGURAZIONE ######
 func main() {
 	// Inizializzazione del registro dei nodi
 	registry := &NodeRegistry{
@@ -83,7 +98,7 @@ func main() {
 	}(listener)
 
 	// Avvio del server RPC
-	fmt.Println("Server di registrazione nodi in esecuzione su localhost:8080")
+	fmt.Println("Server di registrazione dei nodi in esecuzione su localhost:8080")
 	for {
 		conn, err := listener.Accept()
 		if err != nil {

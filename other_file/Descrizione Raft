@@ -8,7 +8,7 @@
 // Un nodo diventa un candidato se non riceve alcuna comunicazione dal leader per un periodo chiamato timeout elettorale,
 // quindi presume che non ci sia più un leader in carica.
 // Inizia l'elezione aumentando il contatore dei termini, votando per se stesso come nuovo leader e inviando un messaggio
-// a tutti gli altri nodo richiedendo il loro voto. Un nodo voterà solo una volta per mandato, in base all'ordine di arrivo.
+// a tutti gli altri nodi richiedendo il loro voto. Un nodo voterà solo una volta per mandato, in base all'ordine di arrivo.
 // Se un candidato riceve un messaggio da un altro nodo con un numero di mandato superiore al mandato corrente del candidato,
 // l'elezione del candidato viene sconfitta e il candidato si trasforma in un follower e riconosce il leader come legittimo.
 // Se un candidato riceve la maggioranza dei voti, diventa il nuovo leader.

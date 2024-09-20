@@ -9,6 +9,11 @@ import (
 	"time"
 )
 
+var (
+	electionTimer *time.Timer // Timer per il conteggio dell'elezione
+	randGen       = rand.New(rand.NewSource(time.Now().UnixNano()))
+)
+
 // ---------------- Strutture: Argomenti e valori di ritorno delle Chiamate RPC ------------------
 
 // HeartBeatArgs contiene gli argomenti per il messaggio di HEARTBEAT inviato dal Leader verso i follower
@@ -170,7 +175,7 @@ func (n *RaftNode) start() {
 
 // Funzione InizioElezione(): Avvia un'elezione se non ricevo comunicazioni dal leader per un tempo superiore al timeout
 func (n *RaftNode) startRaftElection() {
-	fmt.Printf("Nodo %d Started RAFT-election\n", n.ID)
+	fmt.Printf("Node %d Started RAFT-election\n", n.ID)
 	electionMutex.Lock()
 	if election {
 		electionMutex.Unlock()
@@ -191,7 +196,8 @@ func (n *RaftNode) startRaftElection() {
 		}
 	}
 	// Avvia un timeout di attesa per le risposte
-	time.Sleep(electionTimeout)
+	electionTimeout := time.Millisecond * 5000 // todo messo per togliere un errore
+	time.Sleep(electionTimeout)                // 5 secondi
 	electionMutex.Lock()
 	if election == false { // Elezione interrotta durante il periodo di timeout
 		electionMutex.Unlock()
@@ -230,7 +236,7 @@ func (n *RaftNode) sendHeartBeatMessage(node Node) {
 	// Connessione al nodo remoto
 	client, err := rpc.Dial("tcp", node.IPAddress+":"+strconv.Itoa(node.Port))
 	if err != nil {
-		fmt.Printf("Errore durante la connessione al nodo %d: %v\n", node.ID, err)
+		//fmt.Printf("Errore durante la connessione al nodo %d: %v\n", node.ID, err)
 		return
 	}
 	defer func(client *rpc.Client) {
@@ -281,10 +287,10 @@ func (n *RaftNode) sendRequestVoteMessage(node Node, votesReceived *int) {
 		return
 	}
 	// Aggiorna il termine corrente del nodo in base alla risposta ricevuta
-	//if reply.Term > n.CurrentTerm {
-	//	n.becomeFollower(reply.Term)
-	//	return
-	//}
+	if reply.Term > n.CurrentTerm {
+		n.becomeFollower(reply.Term)
+		return
+	}
 	// Controlla se il voto è stato concesso
 	if reply.VoteGranted {
 		// Incrementa il conteggio dei voti ricevuti
@@ -322,11 +328,6 @@ func (n *RaftNode) becomeCandidate() {
 	n.startRaftElection()
 }
 
-var (
-	electionTimer *time.Timer // Timer per il conteggio dell'elezione
-	randGen       = rand.New(rand.NewSource(time.Now().UnixNano()))
-)
-
 func (n *RaftNode) resetElectionTimer() {
 	// Resetta il timer di elezione se esiste già uno attivo
 	if electionTimer != nil {
@@ -341,7 +342,7 @@ func (n *RaftNode) resetElectionTimer() {
 
 	// Avvia una goroutine per attendere il timer e avviare un'elezione quando scade
 	go func() {
-		<-electionTimer.C
+		<-electionTimer.C // Attende che il timer scada
 		fmt.Println("Election timer expired")
 		n.startRaftElection()
 	}()
