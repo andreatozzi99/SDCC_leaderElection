@@ -22,7 +22,7 @@ const (
 // Dipende da dove viene eseguito il nodo
 var (
 	serverAddressAndPort = getServerAddressAndPort()
-	runInContainer       = getRunInContainer()
+	runInContainer       = true
 )
 
 func getServerAddressAndPort() string {

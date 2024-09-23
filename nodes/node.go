@@ -118,9 +118,19 @@ func (n *Node) start() {
 	// --------------------- Chiamate RPC per Registrare il nodo ---------------------
 	var reply int
 	// TODO ################# Nome servizio su file CONF ###################
+
 	if runInContainer {
-		n.IPAddress = containerAddress
+		localIP, err := getLocalIP()
+		if err != nil {
+			fmt.Println("Errore durante l'ottenimento dell'indirizzo IP locale:", err)
+			return
+		}
+		n.IPAddress = localIP
+	} else {
+		n.IPAddress = localAddress
 	}
+	fmt.Println("My IP Address: ", n.IPAddress)
+
 	err = client.Call("NodeRegistry.RegisterNode", n, &reply)
 	if err != nil {
 		fmt.Println("Errore durante la registrazione del nodo:", err)
@@ -318,7 +328,9 @@ func addNodeInNodeList(senderNode Node) {
 
 // Funzione per trovare una porta disponibile nel range prefissato
 func findAvailablePort() (int, error) {
-	for port := 30000; port <= 30100; port++ {
+	rand.Seed(time.Now().UnixNano())
+	for i := 0; i < 100; i++ { // Limitiamo a 100 tentativi per evitare loop infiniti
+		port := rand.Intn(101) + 30000 // Genera un numero casuale tra 30000 e 30100
 		listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 		if err == nil {
 			defer listener.Close()
@@ -342,4 +354,20 @@ func findAvailablePort2() (int, error) {
 	}(listener)
 	addr := listener.Addr().(*net.TCPAddr)
 	return addr.Port, nil
+}
+
+func getLocalIP() (string, error) {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return "", err
+	}
+
+	for _, addr := range addrs {
+		if ipNet, ok := addr.(*net.IPNet); ok && !ipNet.IP.IsLoopback() {
+			if ipNet.IP.To4() != nil {
+				return ipNet.IP.String(), nil
+			}
+		}
+	}
+	return "", fmt.Errorf("non è stato possibile trovare l'indirizzo IP locale")
 }
