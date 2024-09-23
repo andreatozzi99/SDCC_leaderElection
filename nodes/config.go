@@ -8,11 +8,13 @@ import (
 
 const (
 	// -------------------- Configurazione --------------------
+	runInContainer    = true    // Se true, le componenti vengono eseguite ognuna in un container
 	electionAlg       = "Bully" // Bully / Raft
 	emulateLocalCrash = false
 	crashProbability  = 10 // Valori da 0 a 99
 	localAddress      = "localhost"
 	containerAddress  = "node" // Nome del servizio docker
+	logFilePath       = "/app/logfile.json"
 	// -------------------- Raft parameter --------------------
 	maxRttTime       = 5                        // Espresso in secondi
 	electionTimerMin = time.Millisecond * 5000  // 5 secondi
@@ -22,7 +24,6 @@ const (
 // Dipende da dove viene eseguito il nodo
 var (
 	serverAddressAndPort = getServerAddressAndPort()
-	runInContainer       = true
 )
 
 func getServerAddressAndPort() string {
@@ -30,11 +31,4 @@ func getServerAddressAndPort() string {
 		return value
 	}
 	return "localhost:8080" // Valore di default
-}
-
-func getRunInContainer() bool {
-	if _, exists := os.LookupEnv("RUN_IN_CONTAINER"); exists {
-		return true
-	}
-	return false // Valore di default
 }

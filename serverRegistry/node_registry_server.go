@@ -36,7 +36,10 @@ func (nr *NodeRegistry) RegisterNode(node Node, reply *int) error {
 		// Controlla se il nodo è già registrato
 		for _, n := range nr.nodes {
 			if n.ID == node.ID {
-				fmt.Printf("\nNodo: %d già registrato \n", node.ID)
+				fmt.Printf("\nNodo: %d già registrato (Recovery) \n", node.ID)
+				// aggiorno i suoi valori
+				n.IPAddress = node.IPAddress
+				n.Port = node.Port
 				*reply = node.ID
 				return nil
 			}

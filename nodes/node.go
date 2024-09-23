@@ -5,10 +5,12 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"math/rand"
 	"net"
 	"net/rpc"
+	"os"
 	"sync"
 	"time"
 )
@@ -41,52 +43,11 @@ func (n *Node) HEARTBEAT(senderID int, reply *bool) error {
 	return nil
 }
 
-func main() {
-	// Creazione del nodo o del RaftNode in base all'algoritmo di elezione
-	var node interface{}
-	if electionAlg == "Bully" {
-		node = &Node{
-			ID:        -1, // Per il nodeRegistry, che assegnerà un nuovo ID
-			IPAddress: localAddress,
-		}
-	} else if electionAlg == "Raft" {
-		node = &RaftNode{
-			ID:          -1, // Per il nodeRegistry, che assegnerà un nuovo ID
-			IPAddress:   localAddress,
-			CurrentTerm: 0,
-			VotedFor:    -1,
-		}
-	} else {
-		fmt.Println("Algoritmo di elezione non supportato:", electionAlg)
-		return
-	}
-
-	// Verifica il tipo di nodo e imposta la porta
-	switch n := node.(type) {
-	case *Node:
-		port, err := findAvailablePort()
-		if err != nil {
-			fmt.Println("Errore nella ricerca di una porta:", err)
-			return
-		}
-		n.Port = port
-		n.start()
-	case *RaftNode:
-		port, err := findAvailablePort()
-		if err != nil {
-			fmt.Println("Errore nella ricerca di una porta:", err)
-			return
-		}
-		n.Port = port
-		n.start() // Funziona anche per RaftNode, ma c'è replica di codice
-	}
-	select {} // Mantiene il programma in esecuzione
-}
-
 // Metodo per avviare il nodo e registrarne l'indirizzo nel server di registrazione
 // e recuperare la lista dei nodi in rete
 func (n *Node) start() {
-	// ------------- Esposizione dei metodi per le chiamate RPC -------------
+
+	// #################### Esposizione dei metodi per le chiamate RPC ####################
 	err := rpc.Register(n)
 	if err != nil {
 		return
@@ -101,13 +62,14 @@ func (n *Node) start() {
 	fmt.Printf("Nodo in ascolto su porta %d per le chiamate RPC...\n", n.Port)
 	go rpc.Accept(listener)
 
-	// ------------- Ingresso nella rete tramite Node Registry ------------------
+	// #################### Ingresso nella rete tramite Node Registry ####################
+	// ----- Connessione con il server di registrazione dei nodi -----
 	client, err := rpc.Dial("tcp", serverAddressAndPort)
 	if err != nil {
 		fmt.Println("Errore nella connessione al NodeRegistry server:", err)
 		return
 	}
-	// ---- Chiusura connessione con defer ----
+	// ----- Chiusura connessione con defer -----
 	defer func(client *rpc.Client) {
 		err := client.Close()
 		if err != nil {
@@ -118,7 +80,6 @@ func (n *Node) start() {
 	// --------------------- Chiamate RPC per Registrare il nodo ---------------------
 	var reply int
 	// TODO ################# Nome servizio su file CONF ###################
-
 	if runInContainer {
 		localIP, err := getLocalIP()
 		if err != nil {
@@ -145,7 +106,15 @@ func (n *Node) start() {
 	// Visualizza l'ID e la porta assegnati al nodo
 	fmt.Printf("-------- Regisrato sulla rete. ID %d: Porta  %d --------\n", n.ID, n.Port)
 
-	// ---------- RPC per ricevere la lista dei nodi nella rete  ----------
+	// ############# Salva lo stato nel file di log ###############
+	if runInContainer {
+		if err := n.saveState(); err != nil {
+			fmt.Println("Errore durante il salvataggio dello stato:", err)
+			return
+		}
+	}
+
+	// ################# RPC per ricevere la lista dei nodi nella rete  #################
 	// TODO ############ Nome servizio su file CONF ###################
 	err = client.Call("NodeRegistry.GetRegisteredNodes", n, &nodeList)
 	if err != nil {
@@ -156,12 +125,11 @@ func (n *Node) start() {
 	switch electionAlg {
 	case "Bully":
 		n.startBullyElection()
+		// Avvio heartBeatRoutine per contattare periodicamente il Leader
+		n.startHeartBeatRoutine()
 	case "Raft":
-		//todo implementazione Raft
+		// todo n.startRaftElection()
 	}
-
-	// ------------ Avvio heartBeatRoutine per contattare periodicamente il Leader ------------
-	n.startHeartBeatRoutine()
 	// ------------ Avvio goRoutine per simulare il crash ------------------
 	if emulateLocalCrash {
 		go emulateCrash(n, listener)
@@ -250,6 +218,65 @@ func (n *Node) startHeartBeatRoutine() {
 	hbStateMutex.Unlock()
 }
 
+// Funzione per recuperare lo stato del nodo da un file JSON
+func recoverState(path string) (int, string, int, error) {
+	// Verifica se il file esiste e non è vuoto
+	fileInfo, err := os.Stat(path)
+	if err == nil { // Se il file esiste
+		if fileInfo.Size() == 0 { // Se il file è vuoto
+			return -1, "", 0, nil // Nessuno stato da recuperare, e nessun errore
+		}
+	} else {
+		return -1, "", 0, err // Errore durante la verifica dell'esistenza del file
+	}
+
+	// Apre il file di log in modalità lettura
+	file, err := os.Open(logFilePath)
+	if err != nil {
+		return -1, "", 0, err
+	}
+	defer file.Close()
+
+	// Decodifica lo stato del nodo dal file JSON
+	state := make(map[string]interface{})
+	decoder := json.NewDecoder(file)
+	if err := decoder.Decode(&state); err != nil {
+		return -1, "", 0, err
+	}
+
+	// Estrae i valori dallo stato del nodo
+	id := int(state["ID"].(float64))
+	ipAddress := state["IPAddress"].(string)
+	port := int(state["Port"].(float64))
+
+	return id, ipAddress, port, nil
+}
+
+// Scrive su file json ID, IP,PORT
+func (n *Node) saveState() error {
+	// Crea una mappa con lo stato del nodo
+	state := map[string]interface{}{
+		"ID":        n.ID,
+		"IPAddress": n.IPAddress,
+		"Port":      n.Port,
+	}
+
+	// Apre il file di log in modalità scrittura
+	file, err := os.OpenFile(logFilePath, os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	// Codifica lo stato del nodo in formato JSON e scrivilo nel file
+	encoder := json.NewEncoder(file)
+	if err := encoder.Encode(state); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // Un nodo che è in crash:
 // 1) SMETTE DI INVOCARE RPC SUGLI ALTRI NODI
 // 2) NON ACCETTA CHIAMATE RPC DA ALTRI NODI
@@ -315,6 +342,9 @@ func addNodeInNodeList(senderNode Node) {
 	for _, node := range nodeList {
 		if node.ID == senderNode.ID {
 			// Il senderNode è già presente nella lista dei nodi
+			// Aggiorna l'indirizzo IP e la porta del nodo
+			node.IPAddress = senderNode.IPAddress
+			node.Port = senderNode.Port
 			found = true
 			break
 		}
@@ -326,22 +356,8 @@ func addNodeInNodeList(senderNode Node) {
 	}
 }
 
-// Funzione per trovare una porta disponibile nel range prefissato
-func findAvailablePort() (int, error) {
-	rand.Seed(time.Now().UnixNano())
-	for i := 0; i < 100; i++ { // Limitiamo a 100 tentativi per evitare loop infiniti
-		port := rand.Intn(101) + 30000 // Genera un numero casuale tra 30000 e 30100
-		listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
-		if err == nil {
-			defer listener.Close()
-			return port, nil
-		}
-	}
-	return 0, fmt.Errorf("nessuna porta disponibile nel range 30000-30100")
-}
-
 // Funzione per trovare una porta disponibile casuale
-func findAvailablePort2() (int, error) {
+func findAvailablePort() (int, error) {
 	listener, err := net.Listen("tcp", ":0")
 	if err != nil {
 		return 0, err
@@ -354,6 +370,21 @@ func findAvailablePort2() (int, error) {
 	}(listener)
 	addr := listener.Addr().(*net.TCPAddr)
 	return addr.Port, nil
+}
+
+// Funzione per fare il bind su una porta specificata
+func bindToSpecificPort(port int) (int, error) {
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		return 0, err
+	}
+	defer func(listener net.Listener) {
+		err := listener.Close()
+		if err != nil {
+			return
+		}
+	}(listener)
+	return port, nil
 }
 
 func getLocalIP() (string, error) {

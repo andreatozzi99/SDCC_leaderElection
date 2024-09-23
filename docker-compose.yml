@@ -16,9 +16,8 @@ services:
       dockerfile: ./nodes/Dockerfile
     environment:
       - SERVER_ADDRESS_AND_PORT=registry:8080
-      - RUN_IN_CONTAINER = true
     depends_on:
       - registry
     deploy:
       mode: replicated
-      replicas: 5
+      replicas: 3

@@ -8,6 +8,10 @@ RUN go mod download
 
 COPY ./nodes .
 
+# Crea un file di log vuoto per memorizzare lo stato del nodo
+# Questo file verrà utilizzato per recuperare lo stato del nodo in caso di riavvio del container
+RUN touch /app/logfile.json
+
 RUN go build -o node *.go
 
 CMD ["./node"]
