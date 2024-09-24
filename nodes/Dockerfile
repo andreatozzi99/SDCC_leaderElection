@@ -1,4 +1,5 @@
 # Dockerfile.node
+# Studente Andrea Tozzi, MATRICOLA: 0350270
 FROM golang:1.20-alpine
 
 WORKDIR /app

@@ -8,7 +8,15 @@ import (
 	"time"
 )
 
-// * -------- Implementazione metodi per la definizione dell'algoritmo Bully --------- *
+// --------------------- Metodi Esposti per RPC (Messaggi scambiati tra nodi) ----------------------------
+
+// HEARTBEAT Utilizzato dai nodi nella rete sul Leader come meccanismo di Failure Detection
+// Funzione esportata per essere utilizzata come servizio RPC
+func (n *Node) HEARTBEAT(senderID int, reply *bool) error {
+	*reply = true // Se la funzione viene avviata, vuol dire che il nodo è funzionante
+	fmt.Printf("%d LEADER | <-- HEARTBEAT Nodo %d\n", n.ID, senderID)
+	return nil
+}
 
 // ELECTION Metodo invocato come rpc dagli altri nodi della rete
 // In tal modo notificano la loro volontà di diventare Leader
@@ -102,6 +110,8 @@ func (n *Node) STOP(senderNode Node, reply *bool) error {
 	*reply = true
 	return nil
 }
+
+//--------------------------------------------------------------------------------------------------------
 
 // Metodo per avviare un processo di elezione, invocato dalla routine di
 // invio messaggio ELECTION solo sui nodi nella rete con ID superiore all' ID locale

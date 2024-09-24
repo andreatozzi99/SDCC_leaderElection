@@ -8,15 +8,16 @@ import (
 
 const (
 	// -------------------- Configurazione --------------------
-	runInContainer    = true    // Se true, le componenti vengono eseguite ognuna in un container
-	electionAlg       = "Bully" // Bully / Raft
+	runInContainer    = true   // Se true, le componenti vengono eseguite ognuna in un container
+	electionAlg       = "Raft" // Bully / Raft
 	emulateLocalCrash = false
 	crashProbability  = 10 // Valori da 0 a 99
 	localAddress      = "localhost"
 	containerAddress  = "node" // Nome del servizio docker
 	logFilePath       = "/app/logfile.json"
 	// -------------------- Raft parameter --------------------
-	maxRttTime       = 5                        // Espresso in secondi
+	heartbeatTime    = time.Millisecond * 2000  // 2 secondi
+	maxRttTime       = time.Millisecond * 1000  // 1 secondo
 	electionTimerMin = time.Millisecond * 5000  // 5 secondi
 	electionTimerMax = time.Millisecond * 15000 // 15 secondi
 )

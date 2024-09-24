@@ -20,4 +20,4 @@ services:
       - registry
     deploy:
       mode: replicated
-      replicas: 3
+      replicas: 4

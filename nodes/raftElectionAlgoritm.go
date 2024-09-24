@@ -1,3 +1,4 @@
+// Studente Andrea Tozzi, MATRICOLA: 0350270
 package main
 
 import (
@@ -6,6 +7,7 @@ import (
 	"net"
 	"net/rpc"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -110,6 +112,18 @@ func (n *RaftNode) HEARTBEAT(args HeartBeatArgs, reply *HeartBeatReply) error {
 // Metodo per avviare il nodo e registrarne l'indirizzo nel server di registrazione
 // e recuperare la lista dei nodi in rete
 func (n *RaftNode) start() {
+	if runInContainer {
+		localIP, err := getLocalIP()
+		if err != nil {
+			fmt.Println("Errore durante l'ottenimento dell'indirizzo IP locale:", err)
+			return
+		}
+		n.IPAddress = localIP
+	} else {
+		n.IPAddress = localAddress
+	}
+	fmt.Println("My IP Address: ", n.IPAddress)
+
 	// ------------- Esposizione dei metodi per le chiamate RPC -------------
 	err := rpc.Register(n)
 	if err != nil {
@@ -143,8 +157,8 @@ func (n *RaftNode) start() {
 	var reply int
 	// ? Devo creare una struttura node, impostare i parametri a partire da quelli di n, e inviare quelli al NodeRegistry
 	node := &Node{
-		ID:        -1, // Per il nodeRegistry, che assegnerà un nuovo ID
-		IPAddress: localAddress,
+		ID:        n.ID, // Per il nodeRegistry, che assegnerà un nuovo ID
+		IPAddress: n.IPAddress,
 		Port:      n.Port,
 	}
 	err = client.Call("NodeRegistry.RegisterNode", node, &reply)
@@ -187,23 +201,42 @@ func (n *RaftNode) startRaftElection() {
 	// Incrementa il termine corrente e vota per se stesso
 	n.CurrentTerm++
 	n.VotedFor = n.ID
-	votesReceived := 1 // Contatore per i voti ricevuti
+	votesReceived := 1       // Contatore per i voti ricevuti (contiene già il voto di se stesso)
+	successfulResponses := 0 // Contatore per le risposte ricevute senza errori (nodi non in crash)
 	// --------- Invia richieste di voto agli altri nodi --------------
+	var wg sync.WaitGroup
+	results := make(chan error, len(nodeList)) // Canale per gli errori delle goroutine
+
 	for _, node := range nodeList {
 		if node.ID != n.ID {
-			// Invia la richiesta di voto in una goroutine
-			go n.sendRequestVoteMessage(node, &votesReceived)
+			wg.Add(1) // Aumenta il contatore per una nuova goroutine
+			go func(node Node) {
+				defer wg.Done() // Quando la goroutine termina, decrementa il contatore
+				err := n.sendRequestVoteMessage(node, &votesReceived)
+				results <- err // Invia il risultato (errore o nil) nel canale
+			}(node)
 		}
 	}
-	// Avvia un timeout di attesa per le risposte
-	electionTimeout := time.Millisecond * 5000 // todo messo per togliere un errore
-	time.Sleep(electionTimeout)                // 5 secondi
+	time.Sleep(maxRttTime) // Attesa per ricevere le risposte dai nodi
+
+	// Goroutine che chiuderà il canale solo dopo che tutte le altre sono terminate
+	go func() {
+		wg.Wait()      // Aspetta che tutte le goroutine abbiano invocato wg.Done()
+		close(results) // Chiude il canale dopo che tutte le goroutine hanno terminato
+	}()
+	// Raccogli i risultati dal canale
+	for err := range results {
+		if err == nil {
+			successfulResponses++ // Conta solo le risposte senza errori
+		}
+	}
 	electionMutex.Lock()
 	if election == false { // Elezione interrotta durante il periodo di timeout
 		electionMutex.Unlock()
 		return // Il nodo è diventato follower in seguito all'invio di uno dei messaggi RequestVote
 	}
-	if votesReceived < len(nodeList)/2 {
+	// Verifica se la maggioranza delle risposte ricevute (senza errori) ha votato a favore
+	if votesReceived < (successfulResponses+1)/2 { // "+1" include il voto per se stesso
 		election = false // Se non ha ricevuto la maggioranza dei voti, avvia una nuova elezione
 		electionMutex.Unlock()
 		n.startRaftElection()
@@ -228,7 +261,7 @@ func (n *RaftNode) sendHeartBeatRoutine() {
 				go n.sendHeartBeatMessage(node)
 			}
 		}
-		time.Sleep(time.Millisecond * 1000)
+		time.Sleep(heartbeatTime) // Attesa tra un messaggio di HeartBeat e l'altro
 	}
 }
 
@@ -264,12 +297,12 @@ func (n *RaftNode) sendHeartBeatMessage(node Node) {
 	}
 }
 
-func (n *RaftNode) sendRequestVoteMessage(node Node, votesReceived *int) {
+func (n *RaftNode) sendRequestVoteMessage(node Node, votesReceived *int) error {
 	// ---------------- Connessione al nodo remoto -----------------
 	client, err := rpc.Dial("tcp", node.IPAddress+":"+strconv.Itoa(node.Port))
 	if err != nil {
 		fmt.Printf("Errore durante la connessione al nodo %d: %v\n", node.ID, err)
-		return
+		return err
 	}
 	defer func(client *rpc.Client) {
 		err := client.Close()
@@ -284,18 +317,19 @@ func (n *RaftNode) sendRequestVoteMessage(node Node, votesReceived *int) {
 	err = client.Call("RaftNode.REQUESTVOTE", args, &reply)
 	if err != nil {
 		fmt.Printf("Errore durante la richiesta di voto al nodo %d: %v\n", node.ID, err)
-		return
+		return err
 	}
 	// Aggiorna il termine corrente del nodo in base alla risposta ricevuta
 	if reply.Term > n.CurrentTerm {
 		n.becomeFollower(reply.Term)
-		return
+		return nil
 	}
 	// Controlla se il voto è stato concesso
 	if reply.VoteGranted {
 		// Incrementa il conteggio dei voti ricevuti
 		*votesReceived++
 	}
+	return nil
 }
 
 // Funzione becomeFollower(): Avvia la routine di un nodo follower
@@ -306,7 +340,7 @@ func (n *RaftNode) becomeFollower(term int) {
 	election = false
 	electionMutex.Unlock()
 	n.CurrentTerm = term
-	n.VotedFor = -1
+	//n.VotedFor = -1
 }
 
 // Funzione becomeLeader(): Avvia la routine di un nodo leader
@@ -343,7 +377,7 @@ func (n *RaftNode) resetElectionTimer() {
 	// Avvia una goroutine per attendere il timer e avviare un'elezione quando scade
 	go func() {
 		<-electionTimer.C // Attende che il timer scada
-		fmt.Println("Election timer expired")
+		fmt.Println("################## Election timer expired ##################")
 		n.startRaftElection()
 	}()
 

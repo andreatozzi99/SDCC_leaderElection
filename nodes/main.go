@@ -1,3 +1,4 @@
+// Studente Andrea Tozzi, MATRICOLA: 0350270
 package main
 
 import "fmt"
@@ -24,6 +25,7 @@ func main() {
 		fmt.Println("Algoritmo di elezione non supportato:", electionAlg)
 		return
 	}
+	fmt.Println("Algoritmo di elezione selezionato:", electionAlg)
 
 	// #################### Verifica stato di recovery ####################
 	failureDetected := false
@@ -38,6 +40,7 @@ func main() {
 		}
 		if id != -1 { // Solo se è stato recuperato uno stato
 			failureDetected = true
+			bindToSpecificPort(port)
 		}
 	}
 
@@ -47,7 +50,6 @@ func main() {
 		if failureDetected {
 			n.ID = id // Contatterà il nodeRegistry e verrà riconosciuto
 			n.Port = port
-			bindToSpecificPort(port)
 		} else {
 			var err error
 			n.Port, err = findAvailablePort()
@@ -56,12 +58,11 @@ func main() {
 				return
 			}
 		}
-		n.start()
+		n.start() // Start di un nodo con algoritmo Bully
 	case *RaftNode:
 		if failureDetected {
 			n.ID = id //Contatterà il nodeRegistry e verrà riconosciuto
 			n.Port = port
-			bindToSpecificPort(port)
 		} else {
 			var err error
 			n.Port, err = findAvailablePort()
@@ -70,7 +71,8 @@ func main() {
 				return
 			}
 		}
-		n.start() // Funziona anche per RaftNode, ma c'è replica di codice
+		n.start() // Start di un nodo Raft
 	}
+	// Posso iniziare l'elezione in base al tipo di nodo
 	select {} // Mantiene il programma in esecuzione
 }
