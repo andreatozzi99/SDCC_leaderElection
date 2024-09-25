@@ -64,7 +64,7 @@ func (n *RaftNode) REQUESTVOTE(args RequestVoteArgs, reply *RequestVoteReply) er
 	go addNodeInNodeList(senderNode)
 	fmt.Printf("Node %d (T:%d) <-- REQUESTVOTE from Node %d (T:%d)\n", n.ID, n.CurrentTerm, args.Node.ID, args.Node.CurrentTerm)
 
-	if args.Node.CurrentTerm > n.CurrentTerm || (args.Node.CurrentTerm == n.CurrentTerm && args.Node.ID > n.ID) {
+	if args.Node.CurrentTerm > n.CurrentTerm {
 		// Se il termine del messaggio è maggiore del termine corrente del nodo locale
 		n.becomeFollower(args.Node.CurrentTerm) // Aggiorna il termine corrente e diventa follower
 	} else {
@@ -74,7 +74,7 @@ func (n *RaftNode) REQUESTVOTE(args RequestVoteArgs, reply *RequestVoteReply) er
 				Term:        n.CurrentTerm,
 				VoteGranted: false, // Non concede il voto
 			}
-			fmt.Println("Vote: No")
+			fmt.Println("Voted: No")
 			return nil
 		}
 	}
@@ -83,7 +83,7 @@ func (n *RaftNode) REQUESTVOTE(args RequestVoteArgs, reply *RequestVoteReply) er
 		Term:        n.CurrentTerm,
 		VoteGranted: true, // Concede il voto
 	}
-	fmt.Println("Vote: Yes")
+	fmt.Println("Voted: Yes")
 	return nil
 }
 
@@ -92,7 +92,13 @@ func (n *RaftNode) HEARTBEAT(args HeartBeatArgs, reply *HeartBeatReply) error {
 	fmt.Printf("Node %d <-- HEARTBEAT from Leader %d\n", n.ID, args.LeaderID)
 	n.resetElectionTimer() // Resetta il timer di elezione
 	// Se il termine del messaggio è maggiore del termine corrente. Oppure se il termine è uguale ma l'ID del mittente è maggiore
-	if args.Term > n.CurrentTerm || (args.Term == n.CurrentTerm && args.LeaderID > n.ID && leaderID == n.ID) {
+	if hbState && args.LeaderID > n.ID {
+		// Se sono il leader, ma ricevo un heartbeat da un nodo(Leader) con ID maggiore, divento follower
+		fmt.Println("C'è un altro leader con ID maggiore, devo dimettermi dalla carica di leader")
+		n.becomeFollower(args.Term)
+		leaderID = args.LeaderID
+	}
+	if args.Term > n.CurrentTerm {
 		n.becomeFollower(args.Term) // Diventa follower e aggiorna il termine corrente
 		*reply = HeartBeatReply{
 			Term:    n.CurrentTerm,
@@ -173,6 +179,13 @@ func (n *RaftNode) start() {
 	}
 	// Imposto il mio nuovo ID (restituito dalla chiamata rpc al nodeRegistry)
 	n.ID = reply
+	// ############# Salva lo stato nel file di log ###############
+	if runInContainer {
+		if err := saveState(n.ID, n.IPAddress, n.Port); err != nil {
+			fmt.Println("Errore durante il salvataggio dello stato:", err)
+			return
+		}
+	}
 	// Visualizza l'ID e la porta assegnati al nodo
 	fmt.Printf("-------- Registrato sulla rete con ID:%d, Porta:%d --------\n", n.ID, n.Port)
 

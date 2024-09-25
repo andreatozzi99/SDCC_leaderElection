@@ -29,10 +29,16 @@ func main() {
 
 	// #################### Verifica stato di recovery ####################
 	failureDetected := false
+	localIP := ""
 	var id int
 	var port int
 	if runInContainer { // Fase di recovery ammissibile solo se il nodo è in un container
 		var err error
+		localIP, err = getLocalIP()
+		if err != nil {
+			fmt.Println("Errore durante l'ottenimento dell'indirizzo IP locale:", err)
+			return
+		}
 		id, _, port, err = recoverState(logFilePath)
 		if err != nil {
 			fmt.Println("Errore durante il recupero dello stato:", err)
@@ -49,6 +55,7 @@ func main() {
 		if failureDetected {
 			n.ID = id // Contatterà il nodeRegistry e verrà riconosciuto
 			n.Port = port
+			n.IPAddress = localIP
 		} else {
 			var err error
 			n.Port, err = findAvailablePort()
@@ -62,6 +69,7 @@ func main() {
 		if failureDetected {
 			n.ID = id //Contatterà il nodeRegistry e verrà riconosciuto
 			n.Port = port
+			n.IPAddress = localIP
 		} else {
 			var err error
 			n.Port, err = findAvailablePort()
