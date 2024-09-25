@@ -2,6 +2,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"time"
 )
@@ -29,6 +30,7 @@ var (
 
 func getServerAddressAndPort() string {
 	if value, exists := os.LookupEnv("SERVER_ADDRESS_AND_PORT"); exists {
+		fmt.Println("################################################################################")
 		return value
 	}
 	return "localhost:8080" // Valore di default

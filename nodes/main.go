@@ -43,7 +43,6 @@ func main() {
 			bindToSpecificPort(port)
 		}
 	}
-
 	// Verifica il tipo di nodo e imposta la porta
 	switch n := node.(type) {
 	case *Node:

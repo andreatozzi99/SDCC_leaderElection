@@ -64,7 +64,8 @@ func (n *RaftNode) REQUESTVOTE(args RequestVoteArgs, reply *RequestVoteReply) er
 	go addNodeInNodeList(senderNode)
 	fmt.Printf("Node %d (T:%d) <-- REQUESTVOTE from Node %d (T:%d)\n", n.ID, n.CurrentTerm, args.Node.ID, args.Node.CurrentTerm)
 
-	if args.Node.CurrentTerm > n.CurrentTerm { // Se il termine del messaggio è maggiore del termine corrente del nodo locale
+	if args.Node.CurrentTerm > n.CurrentTerm || (args.Node.CurrentTerm == n.CurrentTerm && args.Node.ID > n.ID) {
+		// Se il termine del messaggio è maggiore del termine corrente del nodo locale
 		n.becomeFollower(args.Node.CurrentTerm) // Aggiorna il termine corrente e diventa follower
 	} else {
 		if n.VotedFor != -1 {
@@ -90,8 +91,8 @@ func (n *RaftNode) REQUESTVOTE(args RequestVoteArgs, reply *RequestVoteReply) er
 func (n *RaftNode) HEARTBEAT(args HeartBeatArgs, reply *HeartBeatReply) error {
 	fmt.Printf("Node %d <-- HEARTBEAT from Leader %d\n", n.ID, args.LeaderID)
 	n.resetElectionTimer() // Resetta il timer di elezione
-	// Se il termine del messaggio è maggiore del termine corrente
-	if args.Term > n.CurrentTerm {
+	// Se il termine del messaggio è maggiore del termine corrente. Oppure se il termine è uguale ma l'ID del mittente è maggiore
+	if args.Term > n.CurrentTerm || (args.Term == n.CurrentTerm && args.LeaderID > n.ID && leaderID == n.ID) {
 		n.becomeFollower(args.Term) // Diventa follower e aggiorna il termine corrente
 		*reply = HeartBeatReply{
 			Term:    n.CurrentTerm,
@@ -218,7 +219,6 @@ func (n *RaftNode) startRaftElection() {
 		}
 	}
 	time.Sleep(maxRttTime) // Attesa per ricevere le risposte dai nodi
-
 	// Goroutine che chiuderà il canale solo dopo che tutte le altre sono terminate
 	go func() {
 		wg.Wait()      // Aspetta che tutte le goroutine abbiano invocato wg.Done()
@@ -233,8 +233,9 @@ func (n *RaftNode) startRaftElection() {
 	electionMutex.Lock()
 	if election == false { // Elezione interrotta durante il periodo di timeout
 		electionMutex.Unlock()
-		return // Il nodo è diventato follower in seguito all'invio di uno dei messaggi RequestVote
+		return // Sono diventato follower in seguito all'invio di uno dei messaggi RequestVote
 	}
+	fmt.Println("Nodi attivi nella rete:", successfulResponses+1, "Voti ricevuti:", votesReceived)
 	// Verifica se la maggioranza delle risposte ricevute (senza errori) ha votato a favore
 	if votesReceived < (successfulResponses+1)/2 { // "+1" include il voto per se stesso
 		election = false // Se non ha ricevuto la maggioranza dei voti, avvia una nuova elezione
