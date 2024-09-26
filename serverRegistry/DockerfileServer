@@ -1,0 +1,15 @@
+# DockerfileServer.registry
+FROM golang:1.20-alpine
+
+WORKDIR /app
+
+COPY go.mod go.work ./
+RUN go mod download
+
+COPY ./serverRegistry .
+
+RUN go build -o node_registry_server ./node_registry_server.go
+
+EXPOSE 8080
+
+CMD ["./node_registry_server"]
