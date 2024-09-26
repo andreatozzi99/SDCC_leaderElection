@@ -9,8 +9,8 @@ import (
 
 const (
 	// -------------------- Configurazione --------------------
-	runInContainer    = true   // Se true, le componenti vengono eseguite ognuna in un container
-	electionAlg       = "Raft" // Bully / Raft
+	runInContainer    = true    // Se true, le componenti vengono eseguite ognuna in un container
+	electionAlg       = "Bully" // Bully / Raft
 	emulateLocalCrash = false
 	crashProbability  = 10 // Valori da 0 a 99
 	localAddress      = "localhost"
