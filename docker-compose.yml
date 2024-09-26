@@ -4,7 +4,7 @@ services:
   registry:
     build:
       context: .
-      dockerfile: ./serverRegistry/Dockerfile
+      dockerfile: DockerfileServer
     ports:
       - "8080:8080"
     environment:
@@ -13,7 +13,7 @@ services:
   node:
     build:
       context: .
-      dockerfile: ./nodes/Dockerfile
+      dockerfile: DockerfileNode
     environment:
       - SERVER_ADDRESS_AND_PORT=registry:8080
     depends_on:
