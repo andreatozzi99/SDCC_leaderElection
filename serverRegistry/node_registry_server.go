@@ -117,6 +117,8 @@ func main() {
 func (nr *NodeRegistry) printNodeList() {
 	fmt.Print("\nI nodi registrati sono:")
 	for _, node := range nr.nodes {
-		fmt.Printf("\nID: %d, IP: %s, Port: %d", node.ID, node.IPAddress, node.Port)
+		fmt.Println("ID: %d, IP: %s, Port: %d", node.ID, node.IPAddress, node.Port)
 	}
+	// esegui il flush del buffer di output
+	fmt.Println()
 }

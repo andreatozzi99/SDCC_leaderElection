@@ -9,6 +9,7 @@ services:
       - "8080:8080"
     environment:
       - SERVER_ADDRESS_AND_PORT=localhost:8080
+      - RUN_IN_CONTAINER = true
 
   node:
     build:
@@ -16,6 +17,7 @@ services:
       dockerfile: DockerfileNode
     environment:
       - SERVER_ADDRESS_AND_PORT=registry:8080
+      - RUN_IN_CONTAINER = true
     depends_on:
       - registry
     deploy:

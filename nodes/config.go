@@ -9,7 +9,6 @@ import (
 
 const (
 	// -------------------- Configurazione --------------------
-	runInContainer    = true    // Se true, le componenti vengono eseguite ognuna in un container
 	electionAlg       = "Bully" // Bully / Raft
 	emulateLocalCrash = false
 	crashProbability  = 10 // Valori da 0 a 99
@@ -26,12 +25,22 @@ const (
 // Dipende da dove viene eseguito il nodo
 var (
 	serverAddressAndPort = getServerAddressAndPort()
+	runInContainer       = false //getRunInContainer()
 )
 
 func getServerAddressAndPort() string {
 	if value, exists := os.LookupEnv("SERVER_ADDRESS_AND_PORT"); exists {
-		fmt.Println("################################################################################")
+		runInContainer = true
+		fmt.Println("Run in container: ", runInContainer)
 		return value
 	}
 	return "localhost:8080" // Valore di default
+}
+
+func getRunInContainer() bool {
+	if _, exists := os.LookupEnv("RUN_IN_CONTAINER"); exists {
+		fmt.Println("################################################################################")
+		return true // se esiste la variabile d'ambiente allora il nodo è in un container
+	}
+	return false // Se non esiste la variabile d'ambiente allora il nodo è in locale
 }
