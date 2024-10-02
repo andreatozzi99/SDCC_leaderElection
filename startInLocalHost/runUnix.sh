@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Numero di nodi da avviare
-NUM_NODES=4
+NUM_NODES=6
 
 # Dimensioni delle finestre
 WINDOW_WIDTH=400

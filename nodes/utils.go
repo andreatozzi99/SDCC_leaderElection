@@ -12,22 +12,27 @@ import (
 )
 
 // Utilizzata per simulare un crash e validare gli algoritmi (Interrompe e riavvia il listener RPC)
-func emulateCrash(node *Node, listener net.Listener) {
+func emulateCrash(node *NodeBully, nodeRaft *RaftNode, listener net.Listener) {
 	// Un nodo che è in crash:
 	// 1) SMETTE DI INVOCARE RPC SUGLI ALTRI NODI
 	// 2) NON ACCETTA CHIAMATE RPC DA ALTRI NODI
-	// Interrompere l'esposizione delle chiamate RPC (e riattivarla quando il nodo torna operativo)
-	// Per stabilire quando interrompere o riattivare il servizio RPC utilizzo
+	// Interrompe l'esposizione delle chiamate RPC (e riattiva quando il nodo torna operativo)
+	// Per stabilire quando interrompere o riattivare il servizio RPC, si utilizza
 	// un ciclo for che genera un numero random(compreso tra 0 e Numero definito come variabile globale)
-	// ogni 5 secondi, se il numero generato è uguale a 1, il nodo esegue lo switch di stato (Crashed oppure Attivo)
+	// ogni 5 secondi, se il numero generato è uguale a 1 (a caso), il nodo esegue lo switch di stato (Crashed oppure Attivo)
 	// Inizializza il generatore di numeri casuali con un seme univoco
 	randSource := rand.NewSource(time.Now().UnixNano())
 	randGen := rand.New(randSource)
 	active := true // Variabile booleana per tenere traccia dello stato del nodo (true = attivo, false = in crash)
+	num := 10
 	for {
 		time.Sleep(5 * time.Second) // Attendi 5 secondi prima di ogni iterazione
-		// Genera un numero random tra 0 e 10
-		randomNum := randGen.Intn(11)
+		if active {
+			num = crashProbability
+		} else {
+			num = recoveryProbability
+		}
+		randomNum := randGen.Intn(num)
 		// Se il numero generato è 1, cambia lo stato del nodo da attivo a in crash o viceversa
 		if randomNum == 1 {
 			if active {
@@ -41,7 +46,6 @@ func emulateCrash(node *Node, listener net.Listener) {
 				if err != nil {
 				}
 				fmt.Println(" \n-------------------- IL NODO E' IN CRASH --------------------\n ")
-
 			} else {
 				// Cambia lo stato del nodo da in crash ad attivo
 				fmt.Println(" \n-------------------- IL NODO E' ATTIVO ---------------------\n ")
@@ -61,9 +65,8 @@ func emulateCrash(node *Node, listener net.Listener) {
 				// NON CONOSCO IL NUOVO LEADER DELLA RETE -> Inizio un elezione
 				if electionAlg == "Bully" {
 					node.startBullyElection()
-				}
-				if electionAlg == "Raft" {
-					//todo implementazione Raft
+				} else {
+					nodeRaft.startRaftElection()
 				}
 			}
 		}
@@ -130,7 +133,7 @@ func recoverState(path string) (int, string, int, error) {
 }
 
 // Funzione ausiliaria per aggiungere il senderNode se non è presente nella nodeList
-func addNodeInNodeList(senderNode Node) {
+func addNodeInNodeList(senderNode NodeBully) {
 	found := false
 	for _, node := range nodeList {
 		if node.ID == senderNode.ID {

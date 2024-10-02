@@ -46,7 +46,7 @@ type RaftNode struct {
 	ID        int
 	IPAddress string
 	Port      int
-	//------------- Aggiunte rispetto un classico Node
+	//------------- Aggiunte rispetto un classico NodeBully
 	CurrentTerm int
 	VotedFor    int
 }
@@ -56,13 +56,13 @@ type RaftNode struct {
 // REQUESTVOTE gestisce la ricezione di un messaggio di Richiesta voto da parte di un altro nodo
 func (n *RaftNode) REQUESTVOTE(args RequestVoteArgs, reply *RequestVoteReply) error {
 	// Aggiungo il nodo alla lista dei nodi conosciuti
-	senderNode := Node{
+	senderNode := NodeBully{
 		ID:        args.Node.ID,
 		IPAddress: args.Node.IPAddress,
 		Port:      args.Node.Port,
 	}
 	go addNodeInNodeList(senderNode)
-	fmt.Printf("Node %d (T:%d) <-- REQUESTVOTE from Node %d (T:%d)\n", n.ID, n.CurrentTerm, args.Node.ID, args.Node.CurrentTerm)
+	fmt.Printf("NodeBully %d (T:%d) <-- REQUESTVOTE from NodeBully %d (T:%d)\n", n.ID, n.CurrentTerm, args.Node.ID, args.Node.CurrentTerm)
 
 	if args.Node.CurrentTerm > n.CurrentTerm {
 		// Se il termine del messaggio è maggiore del termine corrente del nodo locale
@@ -89,7 +89,7 @@ func (n *RaftNode) REQUESTVOTE(args RequestVoteArgs, reply *RequestVoteReply) er
 
 // HEARTBEAT gestisce la ricezione di un messaggio di HeartBeat da parte di un altro nodo
 func (n *RaftNode) HEARTBEAT(args HeartBeatArgs, reply *HeartBeatReply) error {
-	fmt.Printf("Node %d <-- HEARTBEAT from Leader %d\n", n.ID, args.LeaderID)
+	fmt.Printf("NodeBully %d <-- HEARTBEAT from Leader %d\n", n.ID, args.LeaderID)
 	n.resetElectionTimer() // Resetta il timer di elezione
 	// Se il termine del messaggio è maggiore del termine corrente. Oppure se il termine è uguale ma l'ID del mittente è maggiore
 	if hbState && args.LeaderID > n.ID {
@@ -146,7 +146,7 @@ func (n *RaftNode) start() {
 	// -------- Accetta le connessioni per RPC in arrivo in una goroutine ------------
 	fmt.Printf("Nodo in ascolto su porta %d per le chiamate RPC...\n", n.Port)
 	go rpc.Accept(listener)
-	// ------------- Ingresso nella rete tramite Node Registry ------------------
+	// ------------- Ingresso nella rete tramite NodeBully Registry ------------------
 	client, err := rpc.Dial("tcp", serverAddressAndPort)
 	if err != nil {
 		fmt.Println("Errore nella connessione al NodeRegistry server:", err)
@@ -163,7 +163,7 @@ func (n *RaftNode) start() {
 	// ---------- RPC per Registrare il nodo --------------
 	var reply int
 	// ? Devo creare una struttura node, impostare i parametri a partire da quelli di n, e inviare quelli al NodeRegistry
-	node := &Node{
+	node := &NodeBully{
 		ID:        n.ID, // Per il nodeRegistry, che assegnerà un nuovo ID
 		IPAddress: n.IPAddress,
 		Port:      n.Port,
@@ -203,7 +203,7 @@ func (n *RaftNode) start() {
 
 // Funzione InizioElezione(): Avvia un'elezione se non ricevo comunicazioni dal leader per un tempo superiore al timeout
 func (n *RaftNode) startRaftElection() {
-	fmt.Printf("Node %d Started RAFT-election\n", n.ID)
+	fmt.Printf("NodeBully %d Started RAFT-election\n", n.ID)
 	electionMutex.Lock()
 	if election {
 		electionMutex.Unlock()
@@ -224,7 +224,7 @@ func (n *RaftNode) startRaftElection() {
 	for _, node := range nodeList {
 		if node.ID != n.ID {
 			wg.Add(1) // Aumenta il contatore per una nuova goroutine
-			go func(node Node) {
+			go func(node NodeBully) {
 				defer wg.Done() // Quando la goroutine termina, decrementa il contatore
 				err := n.sendRequestVoteMessage(node, &votesReceived)
 				results <- err // Invia il risultato (errore o nil) nel canale
@@ -261,8 +261,8 @@ func (n *RaftNode) startRaftElection() {
 	n.becomeLeader()
 }
 
-// Funzione InviaHeartBeat(): Invia un messaggio di HeartBeat agli altri nodi
-func (n *RaftNode) sendHeartBeatRoutine() {
+// HeartBeatRoutine :Invia un messaggio di HeartBeat agli altri nodi
+func (n *RaftNode) HeartBeatRoutine() {
 	fmt.Printf("Leader %d | Start Heart-Beat Routine\n", n.ID)
 	for {
 		if !hbState {
@@ -279,7 +279,7 @@ func (n *RaftNode) sendHeartBeatRoutine() {
 	}
 }
 
-func (n *RaftNode) sendHeartBeatMessage(node Node) {
+func (n *RaftNode) sendHeartBeatMessage(node NodeBully) {
 	// Connessione al nodo remoto
 	client, err := rpc.Dial("tcp", node.IPAddress+":"+strconv.Itoa(node.Port))
 	if err != nil {
@@ -311,7 +311,7 @@ func (n *RaftNode) sendHeartBeatMessage(node Node) {
 	}
 }
 
-func (n *RaftNode) sendRequestVoteMessage(node Node, votesReceived *int) error {
+func (n *RaftNode) sendRequestVoteMessage(node NodeBully, votesReceived *int) error {
 	// ---------------- Connessione al nodo remoto -----------------
 	client, err := rpc.Dial("tcp", node.IPAddress+":"+strconv.Itoa(node.Port))
 	if err != nil {
@@ -348,7 +348,7 @@ func (n *RaftNode) sendRequestVoteMessage(node Node, votesReceived *int) error {
 
 // Funzione becomeFollower(): Avvia la routine di un nodo follower
 func (n *RaftNode) becomeFollower(term int) {
-	fmt.Printf("Node %d I'm a follower \n", n.ID)
+	fmt.Printf("NodeBully %d I'm a follower \n", n.ID)
 	hbState = false
 	electionMutex.Lock()
 	election = false
@@ -359,19 +359,19 @@ func (n *RaftNode) becomeFollower(term int) {
 
 // Funzione becomeLeader(): Avvia la routine di un nodo leader
 func (n *RaftNode) becomeLeader() {
-	fmt.Printf("Node %d I'm LEADER \n", n.ID)
+	fmt.Printf("NodeBully %d I'm LEADER \n", n.ID)
 	electionMutex.Lock()
 	election = false
 	electionMutex.Unlock()
 	n.VotedFor = -1
 	hbState = true
 	// Inizia a inviare messaggi di HeartBeat agli altri nodi
-	go n.sendHeartBeatRoutine()
+	go n.HeartBeatRoutine()
 }
 
 // Funzione becomeCandidate(): Avvia la routine di un nodo candidato
 func (n *RaftNode) becomeCandidate() {
-	fmt.Printf("Node %d I'm a Candidate \n", n.ID)
+	fmt.Printf("NodeBully %d I'm a Candidate \n", n.ID)
 	// Avvia un'elezione
 	n.startRaftElection()
 }

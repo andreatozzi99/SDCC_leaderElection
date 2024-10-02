@@ -1,7 +1,22 @@
 // Studente Andrea Tozzi, MATRICOLA: 0350270
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"sync"
+)
+
+// ---------------- Variabili che rappresentano lo stato di un nodo ------------------
+var (
+	nodeList      = make([]NodeBully, 0) // Lista dei nodi di cui un nodo è a conoscenza
+	leaderID      = -1                   // ID dell'attuale leader. Se < 0 => Leader sconosciuto
+	leaderAddress = ""                   // Indirizzo dell'attuale leader+Porta, inizialmente sconosciuto
+	stopped       = false                // True = Nodo fermato | False = Nodo in esecuzione
+	election      = false                // True = Elezione in corso | False = Nessuna Elezione in corso
+	electionMutex sync.Mutex             // Lucchetto per l'accesso alla variabile election
+	hbState       = false                // True = HeartBeatRoutine in esecuzione | False = HeartBeatRoutine interrotta
+	hbStateMutex  sync.Mutex             // Lucchetto per l'accesso alla variabile hbState
+)
 
 // #################### Crea il nodo adattato all'algoritmo selezionato ####################
 // Esegue la fase di recovery se c'è bisogno
@@ -10,7 +25,7 @@ func main() {
 	// Creazione del nodo o del RaftNode in base all'algoritmo di elezione
 	var node interface{}
 	if electionAlg == "Bully" {
-		node = &Node{
+		node = &NodeBully{
 			ID:        -1, // Per il nodeRegistry, che assegnerà un nuovo ID
 			IPAddress: localAddress,
 		}
@@ -51,7 +66,7 @@ func main() {
 	}
 	// Verifica il tipo di nodo e imposta la porta
 	switch n := node.(type) {
-	case *Node:
+	case *NodeBully:
 		if failureDetected {
 			n.ID = id // Contatterà il nodeRegistry e verrà riconosciuto
 			n.Port = port

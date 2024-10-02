@@ -9,25 +9,13 @@ import (
 	"math/rand"
 	"net"
 	"net/rpc"
-	"sync"
 	"time"
-)
-
-// ---------------- Variabili che rappresentano lo stato di un nodo ------------------
-var (
-	nodeList      = make([]Node, 0) // Lista dei nodi di cui un nodo è a conoscenza
-	leaderID      = -1              // ID dell'attuale leader. Se < 0 => Leader sconosciuto
-	leaderAddress = ""              // Indirizzo dell'attuale leader+Porta, inizialmente sconosciuto
-	election      = false           // True = Elezione in corso | False = Nessuna Elezione in corso
-	electionMutex sync.Mutex        // Lucchetto per l'accesso alla variabile election
-	hbState       = false           // True = HeartBeatRoutine in esecuzione | False = HeartBeatRoutine interrotta
-	hbStateMutex  sync.Mutex        // Lucchetto per l'accesso alla variabile hbState
 )
 
 //------------------------------------------------------------------------------------------
 
-// Node Struttura per rappresentare un nodo
-type Node struct {
+// NodeBully Struttura per rappresentare un nodo
+type NodeBully struct {
 	ID        int
 	IPAddress string
 	Port      int
@@ -35,7 +23,7 @@ type Node struct {
 
 // Metodo per avviare il nodo e registrarne l'indirizzo nel server di registrazione
 // e recuperare la lista dei nodi in rete
-func (n *Node) start() {
+func (n *NodeBully) start() {
 
 	// #################### Esposizione dei metodi per le chiamate RPC ####################
 	err := rpc.Register(n)
@@ -52,7 +40,7 @@ func (n *Node) start() {
 	fmt.Printf("Nodo in ascolto su porta %d per le chiamate RPC...\n", n.Port)
 	go rpc.Accept(listener)
 
-	// #################### Ingresso nella rete tramite Node Registry ####################
+	// #################### Ingresso nella rete tramite NodeBully Registry ####################
 	// ----- Connessione con il server di registrazione dei nodi -----
 	client, err := rpc.Dial("tcp", serverAddressAndPort)
 	if err != nil {
@@ -88,7 +76,7 @@ func (n *Node) start() {
 		return
 	}
 	if reply == -1 {
-		fmt.Println("Il server di registrazione ha rifiutato la registrazione del nodo")
+		fmt.Println("Il server di registrazione ha rifiutato la mia richiesta di registrazione")
 		return
 	}
 	// Imposto il mio nuovo ID (restituito dalla chiamata rpc al nodeRegistry)
@@ -118,14 +106,14 @@ func (n *Node) start() {
 	n.startHeartBeatRoutine()
 	// ------------ Avvio goRoutine per simulare il crash ------------------
 	if emulateLocalCrash {
-		go emulateCrash(n, listener)
+		go emulateCrash(n, nil, listener)
 	}
 	return
 }
 
 // Meccanismo di Failure Detection:
 // Contatta il nodo leader a intervalli casuali (Invocazione del metodo remoto: HEARTBEAT)
-func (n *Node) heartBeatRoutine() {
+func (n *NodeBully) heartBeatRoutine() {
 	fmt.Printf("\n -------- Nodo %d, heartBeatRoutine avviata --------\n", n.ID)
 	randSource := rand.NewSource(time.Now().UnixNano())
 	randGen := rand.New(randSource)
@@ -150,7 +138,7 @@ func (n *Node) heartBeatRoutine() {
 
 // Metodo per contattare il nodo leader tramite la chiamata rpc HEARTBEAT esposta dai nodi
 // @return: True se il leader risponde, False altrimenti.
-func (n *Node) sendHeartBeatMessage() bool {
+func (n *NodeBully) sendHeartBeatMessage() bool {
 	if n.ID == leaderID { // Se il nodo che avvia questa funzione è il leader, non fare nulla
 		fmt.Println("LEADER| Non invio HeartBeat")
 		return true
@@ -162,7 +150,7 @@ func (n *Node) sendHeartBeatMessage() bool {
 	client, err := rpc.Dial("tcp", leaderAddress)
 	if err != nil {
 		// Se non è possibile contattare il leader, avvia un processo di elezione
-		fmt.Println("Nodo", n.ID, "failed connection with leader Node", leaderID, ":", leaderAddress)
+		fmt.Println("Nodo", n.ID, "failed connection with leader NodeBully", leaderID, ":", leaderAddress)
 		return false
 	}
 	defer func(client *rpc.Client) {
@@ -174,10 +162,10 @@ func (n *Node) sendHeartBeatMessage() bool {
 
 	// Chiamata RPC HEARTBEAT per il meccanismo di failure detection al nodo leader
 	var reply bool
-	err = client.Call("Node.HEARTBEAT", n.ID, &reply)
+	err = client.Call("NodeBully.HEARTBEAT", n.ID, &reply)
 	if err != nil {
 		// Se il leader non risponde, avvia un processo di elezione
-		fmt.Println("Nodo", n.ID, "failed to contact leader Node for HeartBeat", leaderID)
+		fmt.Println("Nodo", n.ID, "failed to contact leader NodeBully for HeartBeat", leaderID)
 		return false
 	}
 	//chiamata andata a buon fine
@@ -195,7 +183,7 @@ func interruptHeartBeatRoutine() {
 }
 
 // Funzione per ripristinare heartBeatRoutine se non è attiva. (Per impedire di attivarne più di una)
-func (n *Node) startHeartBeatRoutine() {
+func (n *NodeBully) startHeartBeatRoutine() {
 	hbStateMutex.Lock()
 	if hbState == false {
 		hbState = true

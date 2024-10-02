@@ -8,6 +8,19 @@ import (
 	"sync"
 )
 
+var (
+	manualTopology  = true     // Se true, la topologia della rete è definita manualmente
+	adjacencyMatrix = [][]int{ // Matrice di adiacenza per la topologia manuale
+		{1, 1, 1, 1, 0, 0}, // Nodo 1 conosce: 1, 2, 3, 4
+		{1, 1, 1, 1, 0, 0}, // Nodo 2 conosce: 1, 2, 3, 4
+		{1, 1, 1, 1, 0, 0}, // Nodo 3 conosce: 1, 2, 3, 4
+		{1, 1, 1, 1, 1, 1}, // Nodo 4 conosce: 1, 2, 3, 4, 5, 6
+		{0, 0, 0, 1, 1, 1}, // Nodo 5 conosce: 4, 5, 6
+		{0, 0, 0, 1, 1, 1}, // Nodo 6 conosce: 4, 5, 6
+		// ! La dimensione della matrice deve corrispondere al numero di nodi avviati !
+	}
+)
+
 type Node struct {
 	ID        int
 	IPAddress string
@@ -24,7 +37,7 @@ type NodeRegistry struct {
 // RegisterNode Metodo per registrare un nodo nella rete se non è già presente
 // Funzione esportata per essere utilizzata come servizio RPC
 func (nr *NodeRegistry) RegisterNode(node Node, reply *int) error {
-	nr.mutex.Lock()
+	nr.mutex.Lock() // Blocca l'accesso alla lista dei nodi registrati per evitare conflitti
 	defer nr.mutex.Unlock()
 
 	// Incrementa l'ID solo se il nodo non ha già un ID assegnato (node.ID = -1)
@@ -57,6 +70,9 @@ func (nr *NodeRegistry) RegisterNode(node Node, reply *int) error {
 // GetRegisteredNodes Metodo per ottenere l'elenco dei nodi registrati nella rete
 // Funzione esportata per essere utilizzata come servizio RPC
 func (nr *NodeRegistry) GetRegisteredNodes(input Node, reply *[]Node) error {
+	if manualTopology {
+		return nr.getKnownNodes(input, reply)
+	}
 	// Se la richiesta arriva da un nodo con ID > 0, allora è un nodo già registrato
 	if input.ID > 0 {
 		nr.mutex.Lock()
@@ -66,6 +82,29 @@ func (nr *NodeRegistry) GetRegisteredNodes(input Node, reply *[]Node) error {
 	}
 	// Se la richiesta arriva da un nodo con ID = 0 o -1, allora è un nuovo nodo
 	// TODO Decidere cosa fare in questo caso, attualmente non genera problemi, è solo una sicurezza
+	return nil
+}
+
+// GetKnownNodes Restituisce l'insieme dei nodi conosciuti da un dato nodo secondo la topologia manuale
+func (nr *NodeRegistry) getKnownNodes(input Node, reply *[]Node) error {
+	nr.mutex.Lock()
+	defer nr.mutex.Unlock()
+
+	// Assicurati che l'ID del nodo sia valido e che ci siano nodi registrati
+	if input.ID > 0 && input.ID <= len(adjacencyMatrix) && len(nr.nodes) >= len(adjacencyMatrix[input.ID-1]) && manualTopology {
+		// Estraggo i nodi conosciuti dal nodo corrente secondo la matrice di adiacenza
+		knownNodes := []Node{}
+		for i, knows := range adjacencyMatrix[input.ID-1] {
+			if knows == 1 && i != input.ID-1 && i < len(nr.nodes) { // Verifica che l'indice sia valido
+				knownNodes = append(knownNodes, nr.nodes[i])
+			}
+		}
+		*reply = knownNodes
+		return nil
+	}
+
+	// Se manualTopology è false o l'ID è fuori dai limiti, restituisci tutti i nodi
+	*reply = nr.nodes
 	return nil
 }
 
@@ -117,7 +156,7 @@ func main() {
 func (nr *NodeRegistry) printNodeList() {
 	fmt.Print("\nI nodi registrati sono:")
 	for _, node := range nr.nodes {
-		fmt.Println("ID: %d, IP: %s, Port: %d", node.ID, node.IPAddress, node.Port)
+		fmt.Printf("ID: %d, IP: %s, Port: %d\n", node.ID, node.IPAddress, node.Port)
 	}
 	// esegui il flush del buffer di output
 	fmt.Println()
