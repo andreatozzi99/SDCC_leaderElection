@@ -62,7 +62,7 @@ func (n *RaftNode) REQUESTVOTE(args RequestVoteArgs, reply *RequestVoteReply) er
 		Port:      args.Node.Port,
 	}
 	go addNodeInNodeList(senderNode)
-	fmt.Printf("NodeBully %d (T:%d) <-- REQUESTVOTE from NodeBully %d (T:%d)\n", n.ID, n.CurrentTerm, args.Node.ID, args.Node.CurrentTerm)
+	fmt.Printf("Node %d (T:%d) <-- REQUESTVOTE from Node %d (T:%d)\n", n.ID, n.CurrentTerm, args.Node.ID, args.Node.CurrentTerm)
 
 	if args.Node.CurrentTerm > n.CurrentTerm {
 		// Se il termine del messaggio è maggiore del termine corrente del nodo locale
@@ -89,7 +89,7 @@ func (n *RaftNode) REQUESTVOTE(args RequestVoteArgs, reply *RequestVoteReply) er
 
 // HEARTBEAT gestisce la ricezione di un messaggio di HeartBeat da parte di un altro nodo
 func (n *RaftNode) HEARTBEAT(args HeartBeatArgs, reply *HeartBeatReply) error {
-	fmt.Printf("NodeBully %d <-- HEARTBEAT from Leader %d\n", n.ID, args.LeaderID)
+	fmt.Printf("Node %d (T:%d) <-- HEARTBEAT from Leader %d (T:%d)\n", n.ID, n.CurrentTerm, args.LeaderID, args.Term)
 	n.resetElectionTimer() // Resetta il timer di elezione
 	// Se il termine del messaggio è maggiore del termine corrente. Oppure se il termine è uguale ma l'ID del mittente è maggiore
 	if hbState && args.LeaderID > n.ID {
@@ -146,7 +146,7 @@ func (n *RaftNode) start() {
 	// -------- Accetta le connessioni per RPC in arrivo in una goroutine ------------
 	fmt.Printf("Nodo in ascolto su porta %d per le chiamate RPC...\n", n.Port)
 	go rpc.Accept(listener)
-	// ------------- Ingresso nella rete tramite NodeBully Registry ------------------
+	// ------------- Ingresso nella rete tramite Node Registry ------------------
 	client, err := rpc.Dial("tcp", serverAddressAndPort)
 	if err != nil {
 		fmt.Println("Errore nella connessione al NodeRegistry server:", err)
@@ -203,7 +203,7 @@ func (n *RaftNode) start() {
 
 // Funzione InizioElezione(): Avvia un'elezione se non ricevo comunicazioni dal leader per un tempo superiore al timeout
 func (n *RaftNode) startRaftElection() {
-	fmt.Printf("NodeBully %d Started RAFT-election\n", n.ID)
+	fmt.Printf("Node %d: Started RAFT-election\n", n.ID)
 	electionMutex.Lock()
 	if election {
 		electionMutex.Unlock()
@@ -248,7 +248,7 @@ func (n *RaftNode) startRaftElection() {
 		electionMutex.Unlock()
 		return // Sono diventato follower in seguito all'invio di uno dei messaggi RequestVote
 	}
-	fmt.Println("Nodi attivi nella rete:", successfulResponses+1, "Voti ricevuti:", votesReceived)
+	fmt.Println("Node: Nodi attivi nella rete:", successfulResponses+1, "Voti ricevuti:", votesReceived)
 	// Verifica se la maggioranza delle risposte ricevute (senza errori) ha votato a favore
 	if votesReceived < (successfulResponses+1)/2 { // "+1" include il voto per se stesso
 		election = false // Se non ha ricevuto la maggioranza dei voti, avvia una nuova elezione
@@ -261,7 +261,7 @@ func (n *RaftNode) startRaftElection() {
 	n.becomeLeader()
 }
 
-// HeartBeatRoutine :Invia un messaggio di HeartBeat agli altri nodi
+// HeartBeatRoutine Funzione: Invia un messaggio di HeartBeat agli altri nodi
 func (n *RaftNode) HeartBeatRoutine() {
 	fmt.Printf("Leader %d | Start Heart-Beat Routine\n", n.ID)
 	for {
@@ -300,7 +300,7 @@ func (n *RaftNode) sendHeartBeatMessage(node NodeBully) {
 	var reply HeartBeatReply
 	err = client.Call("RaftNode.HEARTBEAT", args, &reply)
 	if err != nil {
-		fmt.Printf("Errore durante l'invio di HeartBeat al nodo %d: %v\n", node.ID, err)
+		fmt.Printf("Errore durante l'invio di HeartBeat al nodo %d:\n", node.ID)
 		return
 	}
 	// Aggiorna il termine corrente del nodo in base alla risposta ricevuta
@@ -315,7 +315,7 @@ func (n *RaftNode) sendRequestVoteMessage(node NodeBully, votesReceived *int) er
 	// ---------------- Connessione al nodo remoto -----------------
 	client, err := rpc.Dial("tcp", node.IPAddress+":"+strconv.Itoa(node.Port))
 	if err != nil {
-		fmt.Printf("Errore durante la connessione al nodo %d: %v\n", node.ID, err)
+		fmt.Printf("Errore durante la connessione al nodo %d\n", node.ID)
 		return err
 	}
 	defer func(client *rpc.Client) {
@@ -330,7 +330,7 @@ func (n *RaftNode) sendRequestVoteMessage(node NodeBully, votesReceived *int) er
 	var reply RequestVoteReply
 	err = client.Call("RaftNode.REQUESTVOTE", args, &reply)
 	if err != nil {
-		fmt.Printf("Errore durante la richiesta di voto al nodo %d: %v\n", node.ID, err)
+		fmt.Printf("Errore durante la richiesta di voto al nodo %d\n", node.ID)
 		return err
 	}
 	// Aggiorna il termine corrente del nodo in base alla risposta ricevuta
@@ -348,7 +348,7 @@ func (n *RaftNode) sendRequestVoteMessage(node NodeBully, votesReceived *int) er
 
 // Funzione becomeFollower(): Avvia la routine di un nodo follower
 func (n *RaftNode) becomeFollower(term int) {
-	fmt.Printf("NodeBully %d I'm a follower \n", n.ID)
+	fmt.Printf("Node %d (T:%d) I'm a follower \n", n.ID, n.CurrentTerm)
 	hbState = false
 	electionMutex.Lock()
 	election = false
@@ -359,7 +359,7 @@ func (n *RaftNode) becomeFollower(term int) {
 
 // Funzione becomeLeader(): Avvia la routine di un nodo leader
 func (n *RaftNode) becomeLeader() {
-	fmt.Printf("NodeBully %d I'm LEADER \n", n.ID)
+	fmt.Printf("Node %d (T:%d) I'm LEADER \n", n.ID, n.CurrentTerm)
 	electionMutex.Lock()
 	election = false
 	electionMutex.Unlock()
@@ -371,7 +371,7 @@ func (n *RaftNode) becomeLeader() {
 
 // Funzione becomeCandidate(): Avvia la routine di un nodo candidato
 func (n *RaftNode) becomeCandidate() {
-	fmt.Printf("NodeBully %d I'm a Candidate \n", n.ID)
+	fmt.Printf("Node %d I'm a Candidate \n", n.ID)
 	// Avvia un'elezione
 	n.startRaftElection()
 }
@@ -391,8 +391,12 @@ func (n *RaftNode) resetElectionTimer() {
 	// Avvia una goroutine per attendere il timer e avviare un'elezione quando scade
 	go func() {
 		<-electionTimer.C // Attende che il timer scada
-		fmt.Println("################## Election timer expired ##################")
-		n.startRaftElection()
+		// Avvia un'elezione se il timer scade
+		// Evitarlo se il nodo è già leader
+		if !hbState {
+			fmt.Println("################## Election timer expired ##################")
+			n.startRaftElection()
+		}
 	}()
 
 	// Stampa il tempo rimanente prima che scada il timer (per scopi di debug)

@@ -9,7 +9,7 @@ import (
 )
 
 var (
-	manualTopology  = true     // Se true, la topologia della rete è definita manualmente
+	manualTopology  = false    // Se true, la topologia della rete è definita manualmente
 	adjacencyMatrix = [][]int{ // Matrice di adiacenza per la topologia manuale
 		{1, 1, 1, 1, 0, 0}, // Nodo 1 conosce: 1, 2, 3, 4
 		{1, 1, 1, 1, 0, 0}, // Nodo 2 conosce: 1, 2, 3, 4

@@ -1,4 +1,6 @@
 
+# Comandi Docker
+
 ### 1. **Costruire e lanciare i container con Docker Compose**
 Costruisce le immagini (se necessario) e avvia tutti i container in background.
 
@@ -58,10 +60,11 @@ Ferma un container specifico.
 
 ```bash
 docker stop <nome_container>
-
 ```
+
 ### 8.2 **Interrompere il gruppo compose**
 Ferma tutti i container in esecuzione.
+
 ```bash
 docker-compose stop
 ```
@@ -87,7 +90,7 @@ Quando hai finito di interagire con il container, puoi uscire.
 exit
 ```
 
-###  **Arresta l'istanza utilizzando il comando AWS CLI:**
+### 12. **Arresta l'istanza utilizzando il comando AWS CLI:**
 ```bash
 aws ec2 stop-instances --instance-ids <instance_id>
 ```

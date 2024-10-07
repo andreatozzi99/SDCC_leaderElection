@@ -13,10 +13,11 @@ const (
 	emulateLocalCrash   = false
 	crashProbability    = 10 // Range di numeri per simulare crash di un nodo, un numero random generato ogni 5 secondi.
 	recoveryProbability = 5  // Range numeri per simulare la riattivazione del nodo
-	localAddress        = "localhost"
-	containerAddress    = "node" // Nome del servizio docker
-	logFilePath         = "/app/logfile.json"
-	maxRttTime          = time.Millisecond * 1000 // 1 secondo
+	// --------------------------------------------------------
+	localAddress     = "localhost"
+	containerAddress = "node" // Nome del servizio docker
+	logFilePath      = "/app/logfile.json"
+	maxRttTime       = time.Millisecond * 1000 // 1 secondo
 	// -------------------- Raft parameter --------------------
 	heartbeatTime    = time.Millisecond * 2000  // 2 secondi
 	electionTimerMin = time.Millisecond * 5000  // 5 secondi

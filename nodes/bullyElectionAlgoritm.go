@@ -141,8 +141,8 @@ func (n *NodeBully) startBullyElection() {
 		}
 	}
 	// ---------- Avvia un timer per attendere messaggi di tipo STOP ------------
+	time.Sleep(maxRttTime) // Attesa per ricevere messaggi di tipo STOP
 	if i != 0 {
-		time.Sleep(maxRttTime) // Attesa per ricevere messaggi di tipo STOP
 		// ---------- Se l'elezione è stata interrotta, termina la funzione -------------
 		electionMutex.Lock()
 		if !election {
@@ -153,7 +153,7 @@ func (n *NodeBully) startBullyElection() {
 		electionMutex.Unlock()
 	}
 	// Se il costrutto "if" non viene eseguito, non ci sono nodi con ID maggiore: CASO OTTIMO
-	time.Sleep(maxRttTime) // Attesa per ricevere atri messaggi ELECTION per bloccare molteplici elezioni
+	// time.Sleep(maxRttTime) // Attesa per ricevere atri messaggi ELECTION per bloccare molteplici elezioni
 	// ----------- SONO IL LEADER ------------
 	fmt.Printf("\nNodo %d SONO LEADER. COORDINATOR --> tutta la rete.\n", n.ID)
 	leaderID = n.ID
@@ -203,13 +203,13 @@ func (n *NodeBully) sendCoordinatorMessages() {
 				// Effettua una chiamata RPC per invocare la procedura remota COORDINATOR
 				client, err := rpc.Dial("tcp", fmt.Sprintf("%s:%d", node.IPAddress, node.Port))
 				if err != nil {
-					fmt.Printf("Errore durante la connessione al nodo %d: %v\n", node.ID, err)
+					fmt.Printf("Errore durante la connessione al nodo %d: \n", node.ID)
 					return
 				}
 				defer func(client *rpc.Client) {
 					err := client.Close()
 					if err != nil {
-						fmt.Printf("Errore durante la chiusura della connessione al nodo %d: %v\n", node.ID, err)
+						fmt.Printf("Errore durante la chiusura della connessione al nodo %d:\n", node.ID)
 					}
 				}(client)
 				// Variabile per memorizzare la risposta remota
@@ -217,7 +217,7 @@ func (n *NodeBully) sendCoordinatorMessages() {
 				// Effettua la chiamata RPC
 				err = client.Call("NodeBully.COORDINATOR", n, &reply)
 				if err != nil {
-					fmt.Printf("Errore durante la chiamata RPC COORDINATOR al nodo %d: %v\n", node.ID, err)
+					fmt.Printf("Errore durante la chiamata RPC COORDINATOR al nodo %d\n", node.ID)
 					return
 				}
 				// Stampa un messaggio di conferma

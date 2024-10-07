@@ -2,7 +2,9 @@
 package main
 
 import (
+	"flag"
 	"fmt"
+	"strconv"
 	"sync"
 )
 
@@ -23,15 +25,33 @@ var (
 // Avvia il nodo
 func main() {
 	// Creazione del nodo o del RaftNode in base all'algoritmo di elezione
+	// Definisci il flag della riga di comando
+	var customValue string
+	flag.StringVar(&customValue, "value", "", "ID opzionale del nodo che si vuole avviare (solo per test)")
+
+	// Analizza i flag della riga di comando
+	flag.Parse()
+
+	ID := -1
+	if customValue != "" {
+		fmt.Println("ID fornito da riga di comando (solo per test):", customValue)
+		var err error
+		ID, err = strconv.Atoi(customValue)
+		if err != nil {
+			fmt.Println("Errore nella conversione in intero del valore da riga di comando:", err)
+			ID = -1
+		}
+	}
+
 	var node interface{}
 	if electionAlg == "Bully" {
 		node = &NodeBully{
-			ID:        -1, // Per il nodeRegistry, che assegnerà un nuovo ID
+			ID:        ID, // Per il nodeRegistry, che assegnerà un nuovo ID
 			IPAddress: localAddress,
 		}
 	} else if electionAlg == "Raft" {
 		node = &RaftNode{
-			ID:          -1, // Per il nodeRegistry, che assegnerà un nuovo ID
+			ID:          ID, // Per il nodeRegistry, che assegnerà un nuovo ID
 			IPAddress:   localAddress,
 			CurrentTerm: 0,
 			VotedFor:    -1,
