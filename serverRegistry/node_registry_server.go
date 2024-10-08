@@ -54,6 +54,7 @@ func (nr *NodeRegistry) RegisterNode(node Node, reply *int) error {
 				n.IPAddress = node.IPAddress
 				n.Port = node.Port
 				*reply = node.ID
+				nr.printNodeList()
 				return nil
 			}
 		}
@@ -80,8 +81,7 @@ func (nr *NodeRegistry) GetRegisteredNodes(input Node, reply *[]Node) error {
 		*reply = nr.nodes // Restituisce l'elenco dei nodi registrati
 		return nil
 	}
-	// Se la richiesta arriva da un nodo con ID = 0 o -1, allora è un nuovo nodo
-	// TODO Decidere cosa fare in questo caso, attualmente non genera problemi, è solo una sicurezza
+	nr.mutex.Unlock()
 	return nil
 }
 

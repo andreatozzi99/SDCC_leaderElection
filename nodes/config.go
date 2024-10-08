@@ -26,8 +26,8 @@ const (
 
 // Dipende da dove viene eseguito il nodo
 var (
+	runInContainer       = false
 	serverAddressAndPort = getEnvVariabiles()
-	runInContainer       = false //getRunInContainer()
 )
 
 func getEnvVariabiles() string {

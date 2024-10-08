@@ -102,6 +102,7 @@ func main() {
 		n.start() // Start di un nodo con algoritmo Bully
 	case *RaftNode:
 		if failureDetected {
+			fmt.Println("Failure detected")
 			n.ID = id //Contatterà il nodeRegistry e verrà riconosciuto
 			n.Port = port
 			n.IPAddress = localIP

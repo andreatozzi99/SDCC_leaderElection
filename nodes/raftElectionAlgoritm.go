@@ -63,7 +63,6 @@ func (n *RaftNode) REQUESTVOTE(args RequestVoteArgs, reply *RequestVoteReply) er
 	}
 	go addNodeInNodeList(senderNode)
 	fmt.Printf("Node %d (T:%d) <-- REQUESTVOTE from Node %d (T:%d)\n", n.ID, n.CurrentTerm, args.Node.ID, args.Node.CurrentTerm)
-
 	if args.Node.CurrentTerm > n.CurrentTerm {
 		// Se il termine del messaggio è maggiore del termine corrente del nodo locale
 		n.becomeFollower(args.Node.CurrentTerm) // Aggiorna il termine corrente e diventa follower
@@ -214,7 +213,7 @@ func (n *RaftNode) startRaftElection() {
 	electionMutex.Unlock()
 	// Incrementa il termine corrente e vota per se stesso
 	n.CurrentTerm++
-	n.VotedFor = n.ID
+	n.VotedFor = n.ID        // TODO Impostare questo valore è giusto? Posso votare solo per me o concedere un altro voto?
 	votesReceived := 1       // Contatore per i voti ricevuti (contiene già il voto di se stesso)
 	successfulResponses := 0 // Contatore per le risposte ricevute senza errori (nodi non in crash)
 	// --------- Invia richieste di voto agli altri nodi --------------
@@ -354,7 +353,7 @@ func (n *RaftNode) becomeFollower(term int) {
 	election = false
 	electionMutex.Unlock()
 	n.CurrentTerm = term
-	//n.VotedFor = -1
+	n.VotedFor = -1
 }
 
 // Funzione becomeLeader(): Avvia la routine di un nodo leader

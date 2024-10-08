@@ -58,7 +58,6 @@ func (n *NodeBully) ELECTION(senderNode NodeBully, reply *bool) error {
 		}
 		fmt.Printf("Nodo %d: STOP --> Nodo %d\n", n.ID, senderNode.ID)
 		// --------------------------------- Avvio Elezione ---------------------------------------
-		// todo : non devo avviare un elezione se sono già stato interrotto (STOP) una volta da quando il leader è in crash
 		if !stopped {
 			// Esempio: sono 2, crash nodo Leader 5, inizio elezione, 4 mi invia STOP, fermo elezione,
 			// 			il nodo 1 mi invia ELECTION, inizio elezione=> NON VA BENE
