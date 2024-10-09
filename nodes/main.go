@@ -27,11 +27,11 @@ func main() {
 	// Creazione del nodo o del RaftNode in base all'algoritmo di elezione
 	// Definisci il flag della riga di comando
 	var customValue string
-	flag.StringVar(&customValue, "value", "", "ID opzionale del nodo che si vuole avviare (solo per test)")
-
+	var algorithm string
+	flag.StringVar(&customValue, "id", "", "ID opzionale del nodo che si vuole avviare (solo per test)")
+	flag.StringVar(&algorithm, "alg", "Raft", "Algoritmo di elezione da utilizzare (Bully / Raft)")
 	// Analizza i flag della riga di comando
 	flag.Parse()
-
 	ID := -1
 	if customValue != "" {
 		fmt.Println("ID fornito da riga di comando (solo per test):", customValue)
@@ -42,7 +42,12 @@ func main() {
 			ID = -1
 		}
 	}
-
+	if algorithm == "Bully" || algorithm == "Raft" {
+		fmt.Println("Algoritmo di elezione specificato: ", algorithm)
+		electionAlg = algorithm
+	} else {
+		fmt.Println("Algoritmo di elezione impostato in config.go: ", electionAlg)
+	}
 	var node interface{}
 	if electionAlg == "Bully" {
 		node = &NodeBully{
@@ -60,7 +65,6 @@ func main() {
 		fmt.Println("Algoritmo di elezione non supportato:", electionAlg)
 		return
 	}
-	fmt.Println("Algoritmo di elezione selezionato:", electionAlg)
 
 	// #################### Verifica stato di recovery ####################
 	failureDetected := false

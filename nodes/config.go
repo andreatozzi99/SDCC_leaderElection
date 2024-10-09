@@ -9,7 +9,7 @@ import (
 
 const (
 	// -------------------- Configurazione --------------------
-	electionAlg         = "Raft" // Bully / Raft
+	//electionAlg         = "Raft" // Bully / Raft
 	emulateLocalCrash   = false
 	crashProbability    = 10 // Range di numeri per simulare crash di un nodo, un numero random generato ogni 5 secondi.
 	recoveryProbability = 5  // Range numeri per simulare la riattivazione del nodo
@@ -26,6 +26,7 @@ const (
 
 // Dipende da dove viene eseguito il nodo
 var (
+	electionAlg          = "Bully" // Bully / Raft
 	runInContainer       = false
 	serverAddressAndPort = getEnvVariabiles()
 )

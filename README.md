@@ -24,7 +24,7 @@ Per eseguire il progetto in locale, seguire i passaggi elencati:
       ```
     - Per riattivare un nodo precedentemente arrestato, esegui il comando:
       ```sh
-      cd nodes && go run . -value <ID>
+      cd nodes && go run . -id <ID>
       ```
       Sostituisci `<ID>` con l'ID del nodo che vuoi riattivare. (Solo per fase test/debug)
 
