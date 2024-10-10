@@ -26,7 +26,7 @@ const (
 
 // Dipende da dove viene eseguito il nodo
 var (
-	runInContainer       = false
+	runInContainer       = false // Non modificare, gestita automaticamente
 	serverAddressAndPort = getEnvVariabiles()
 )
 

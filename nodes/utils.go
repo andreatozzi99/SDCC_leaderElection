@@ -135,12 +135,12 @@ func recoverState(path string) (int, string, int, error) {
 // Funzione ausiliaria per aggiungere il senderNode se non è presente nella nodeList
 func addNodeInNodeList(senderNode NodeBully) {
 	found := false
-	for _, node := range nodeList {
+	for i, node := range nodeList {
 		if node.ID == senderNode.ID {
 			// Il senderNode è già presente nella lista dei nodi
 			// Aggiorna l'indirizzo IP e la porta del nodo
-			node.IPAddress = senderNode.IPAddress
-			node.Port = senderNode.Port
+			nodeList[i].IPAddress = senderNode.IPAddress
+			nodeList[i].Port = senderNode.Port
 			found = true
 			break
 		}

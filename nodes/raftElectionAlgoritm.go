@@ -55,25 +55,37 @@ type RaftNode struct {
 
 // REQUESTVOTE gestisce la ricezione di un messaggio di Richiesta voto da parte di un altro nodo
 func (n *RaftNode) REQUESTVOTE(args RequestVoteArgs, reply *RequestVoteReply) error {
+	// Ho ricevuto una richiesta di voto da un altro nodo -> Il leader è in crash oppure è un nuovo nodo
 	// Aggiungo il nodo alla lista dei nodi conosciuti
 	senderNode := NodeBully{
 		ID:        args.Node.ID,
 		IPAddress: args.Node.IPAddress,
 		Port:      args.Node.Port,
 	}
-	go addNodeInNodeList(senderNode)
+	go addNodeInNodeList(senderNode) // Aggiungi il nodo alla lista dei nodi conosciuti
 	fmt.Printf("Node %d (T:%d) <-- REQUESTVOTE from Node %d (T:%d)\n", n.ID, n.CurrentTerm, args.Node.ID, args.Node.CurrentTerm)
+	// Se il mandato del mittente è maggiore del mandato corrente
 	if args.Node.CurrentTerm > n.CurrentTerm {
-		// Se il termine del messaggio è maggiore del termine corrente del nodo locale
-		n.becomeFollower(args.Node.CurrentTerm) // Aggiorna il termine corrente e diventa follower
+		n.becomeFollower(args.Node.CurrentTerm) // Aggiorna il mandato corrente e diventa follower
 	} else {
-		if n.VotedFor != -1 {
-			// Se ha già votato per un altro candidato, rifiuta la richiesta di voto
+		if args.Node.CurrentTerm == n.CurrentTerm { // Se abbiamo lo stesso mandato, devo controllare se ho già votato
+			if n.VotedFor != -1 {
+				// Se ha già votato per un altro candidato, rifiuta la richiesta di voto
+				*reply = RequestVoteReply{
+					Term:        n.CurrentTerm,
+					VoteGranted: false, // Non concede il voto
+				}
+				fmt.Println("Voted: No")
+				return nil
+			}
+			// Se abbiamo stesso mandato e non ho votato, concedo il voto
+		} else {
+			// Se il mittente ha un mandato minore
 			*reply = RequestVoteReply{
 				Term:        n.CurrentTerm,
-				VoteGranted: false, // Non concede il voto
+				VoteGranted: true, // Non concede il voto
 			}
-			fmt.Println("Voted: No")
+			fmt.Println("Voted: Yes")
 			return nil
 		}
 	}
@@ -91,23 +103,34 @@ func (n *RaftNode) HEARTBEAT(args HeartBeatArgs, reply *HeartBeatReply) error {
 	fmt.Printf("Node %d (T:%d) <-- HEARTBEAT from Leader %d (T:%d)\n", n.ID, n.CurrentTerm, args.LeaderID, args.Term)
 	n.resetElectionTimer() // Resetta il timer di elezione
 	// Se il termine del messaggio è maggiore del termine corrente. Oppure se il termine è uguale ma l'ID del mittente è maggiore
-	if hbState && args.LeaderID > n.ID {
+	if hbState && args.Term > n.CurrentTerm {
 		// Se sono il leader, ma ricevo un heartbeat da un nodo(Leader) con ID maggiore, divento follower
-		fmt.Println("C'è un altro leader con ID maggiore, devo dimettermi dalla carica di leader")
+		fmt.Println("C'è un altro leader con Mandato maggiore, devo dimettermi dalla carica di leader")
 		n.becomeFollower(args.Term)
 		leaderID = args.LeaderID
 	}
 	if args.Term > n.CurrentTerm {
-		n.becomeFollower(args.Term) // Diventa follower e aggiorna il termine corrente
+		leaderID = args.LeaderID
+		n.CurrentTerm = args.Term
+		//n.becomeFollower(args.Term) // Diventa follower e aggiorna il termine corrente
 		*reply = HeartBeatReply{
 			Term:    n.CurrentTerm,
 			Success: true, // Accetta l'HeartBeat
 		}
 	} else {
-		// Ignora il messaggio se il termine del messaggio è minore o uguale al termine corrente
-		*reply = HeartBeatReply{
-			Term:    n.CurrentTerm,
-			Success: false, // Rifiuta l'HeartBeat
+		if args.Term == n.CurrentTerm {
+			// Ignora il messaggio se il termine del messaggio è uguale al termine corrente
+			*reply = HeartBeatReply{
+				Term:    n.CurrentTerm,
+				Success: true, // Rifiuta l'HeartBeat (Valore non utilizzato dal leader)
+			}
+		} else {
+			// Il leader che invia HeartBeat ha un mandato inferiore al locale
+			fmt.Println("################ Comportamento non previsto in rete fully connected ################")
+			*reply = HeartBeatReply{
+				Term:    n.CurrentTerm,
+				Success: false, // Rifiuta l'HeartBeat (Valore non utilizzato dal leader)
+			}
 		}
 	}
 	return nil
@@ -334,8 +357,8 @@ func (n *RaftNode) sendRequestVoteMessage(node NodeBully, votesReceived *int) er
 	}
 	// Aggiorna il termine corrente del nodo in base alla risposta ricevuta
 	if reply.Term > n.CurrentTerm {
-		n.becomeFollower(reply.Term)
-		return nil
+		n.becomeFollower(reply.Term) // Aggiorno term
+		//return nil
 	}
 	// Controlla se il voto è stato concesso
 	if reply.VoteGranted {
@@ -345,7 +368,7 @@ func (n *RaftNode) sendRequestVoteMessage(node NodeBully, votesReceived *int) er
 	return nil
 }
 
-// Funzione becomeFollower(): Avvia la routine di un nodo follower
+// Funzione becomeFollower(): Avvia la routine di un nodo follower: Interrompi l'elezione e aggiorna mandato
 func (n *RaftNode) becomeFollower(term int) {
 	fmt.Printf("Node %d (T:%d) I'm a follower \n", n.ID, n.CurrentTerm)
 	hbState = false
