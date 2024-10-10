@@ -83,7 +83,7 @@ func (n *RaftNode) REQUESTVOTE(args RequestVoteArgs, reply *RequestVoteReply) er
 			// Se il mittente ha un mandato minore
 			*reply = RequestVoteReply{
 				Term:        n.CurrentTerm,
-				VoteGranted: true, // Non concede il voto
+				VoteGranted: true,
 			}
 			fmt.Println("Voted: Yes")
 			return nil
@@ -357,8 +357,9 @@ func (n *RaftNode) sendRequestVoteMessage(node NodeBully, votesReceived *int) er
 	}
 	// Aggiorna il termine corrente del nodo in base alla risposta ricevuta
 	if reply.Term > n.CurrentTerm {
+		fmt.Println("Election Interrupted")
 		n.becomeFollower(reply.Term) // Aggiorno term
-		//return nil
+		return nil
 	}
 	// Controlla se il voto è stato concesso
 	if reply.VoteGranted {
